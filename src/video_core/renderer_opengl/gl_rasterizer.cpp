@@ -848,7 +848,7 @@ void RasterizerOpenGL::ReloadColorBuffer() {
 
     std::unique_ptr<u8[]> temp_fb_color_buffer(new u8[fb_color_texture.width * fb_color_texture.height * bytes_per_pixel]);
 
-    // Directly copy pixels. Internal OpenGL color formats are consistent so no conversion is necessary.
+    // Directly copy pixels. The OpenGL internal formats match the 3DS ones, so no conversion is necessary.
     switch (bytes_per_pixel) {
     case 4:
         VideoCore::CopyTextureAndTile<u32>((u32*)temp_fb_color_buffer.get(), (u32*)color_buffer, fb_color_texture.width, fb_color_texture.height);
@@ -967,7 +967,7 @@ void RasterizerOpenGL::CommitColorBuffer() {
             state.texture_units[0].texture_2d = 0;
             state.Apply();
 
-            // Directly copy pixels. Internal OpenGL color formats are consistent so no conversion is necessary.
+            // Directly copy pixels. The OpenGL internal formats match the 3DS ones, so no conversion is necessary.
             switch (bytes_per_pixel) {
             case 4:
                 VideoCore::CopyTextureAndTile<u32>((u32*)color_buffer, (u32*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
