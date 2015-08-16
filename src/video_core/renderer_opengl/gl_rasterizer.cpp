@@ -102,9 +102,10 @@ void RasterizerOpenGL::InitObjects() {
     glEnableVertexAttribArray(attrib_texcoords + 1);
     glEnableVertexAttribArray(attrib_texcoords + 2);
 
-    // Create textures for OGL framebuffer that will be rendered to, initially 1x1 to succeed in framebuffer creation
+    // Create textures for OGL framebuffer that will be rendered to, initially 8x8 to succeed in framebuffer creation
+    // 3DS textures' width and height must be multiples of 8
     fb_color_texture.texture.Create();
-    ReconfigureColorTexture(fb_color_texture, Pica::Regs::ColorFormat::RGBA8, 1, 1);
+    ReconfigureColorTexture(fb_color_texture, Pica::Regs::ColorFormat::RGBA8, 8, 8);
 
     state.texture_units[0].texture_2d = fb_color_texture.texture.handle;
     state.Apply();
@@ -848,15 +849,21 @@ void RasterizerOpenGL::ReloadColorBuffer() {
     std::unique_ptr<u8[]> temp_fb_color_buffer(new u8[fb_color_texture.width * fb_color_texture.height * bytes_per_pixel]);
 
     // Directly copy pixels. Internal OpenGL color formats are consistent so no conversion is necessary.
-    for (int y = 0; y < fb_color_texture.height; ++y) {
-        for (int x = 0; x < fb_color_texture.width; ++x) {
-            const u32 coarse_y = y & ~7;
-            u32 dst_offset = VideoCore::GetMortonOffset(x, y, bytes_per_pixel) + coarse_y * fb_color_texture.width * bytes_per_pixel;
-            u32 gl_pixel_index = (x + y * fb_color_texture.width) * bytes_per_pixel;
-
-            u8* pixel = color_buffer + dst_offset;
-            memcpy(&temp_fb_color_buffer[gl_pixel_index], pixel, bytes_per_pixel);
-        }
+    switch (bytes_per_pixel) {
+    case 4:
+        VideoCore::CopyTextureAndTile<u32>((u32*)temp_fb_color_buffer.get(), (u32*)color_buffer, fb_color_texture.width, fb_color_texture.height);
+        break;
+    case 3:
+        VideoCore::CopyTextureAndTile<u24_be>((u24_be*)temp_fb_color_buffer.get(), (u24_be*)color_buffer, fb_color_texture.width, fb_color_texture.height);
+        break;
+    case 2:
+        VideoCore::CopyTextureAndTile<u16>((u16*)temp_fb_color_buffer.get(), (u16*)color_buffer, fb_color_texture.width, fb_color_texture.height);
+        break;
+    case 1:
+        VideoCore::CopyTextureAndTile<u8>(temp_fb_color_buffer.get(), color_buffer, fb_color_texture.width, fb_color_texture.height);
+        break;
+    default:
+        LOG_ERROR(Render_OpenGL, "Unimplemented pixel size %u bytes per pixel", bytes_per_pixel);
     }
 
     state.texture_units[0].texture_2d = fb_color_texture.texture.handle;
@@ -961,15 +968,21 @@ void RasterizerOpenGL::CommitColorBuffer() {
             state.Apply();
 
             // Directly copy pixels. Internal OpenGL color formats are consistent so no conversion is necessary.
-            for (int y = 0; y < fb_color_texture.height; ++y) {
-                for (int x = 0; x < fb_color_texture.width; ++x) {
-                    const u32 coarse_y = y & ~7;
-                    u32 dst_offset = VideoCore::GetMortonOffset(x, y, bytes_per_pixel) + coarse_y * fb_color_texture.width * bytes_per_pixel;
-                    u32 gl_pixel_index = x * bytes_per_pixel + y * fb_color_texture.width * bytes_per_pixel;
-
-                    u8* pixel = color_buffer + dst_offset;
-                    memcpy(pixel, &temp_gl_color_buffer[gl_pixel_index], bytes_per_pixel);
-                }
+            switch (bytes_per_pixel) {
+            case 4:
+                VideoCore::CopyTextureAndTile<u32>((u32*)color_buffer, (u32*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                break;
+            case 3:
+                VideoCore::CopyTextureAndTile<u24_be>((u24_be*)color_buffer, (u24_be*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                break;
+            case 2:
+                VideoCore::CopyTextureAndTile<u16>((u16*)color_buffer, (u16*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                break;
+            case 1:
+                VideoCore::CopyTextureAndTile<u8>(color_buffer, temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                break;
+            default:
+                LOG_ERROR(Render_OpenGL, "Unimplemented pixel size %u bytes per pixel", bytes_per_pixel);
             }
         }
     }

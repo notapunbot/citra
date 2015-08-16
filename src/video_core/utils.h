@@ -35,17 +35,52 @@ struct TGAHeader {
  */
 void DumpTGA(std::string filename, short width, short height, u8* raw_data);
 
+/// Lookup table for the offsets used to convert an image to Morton order.
+static const u8 morton_lut[64] = {
+    0,  1,  4,  5, 16, 17, 20, 21,
+    2,  3,  6,  7, 18, 19, 22, 23,
+    8,  9, 12, 13, 24, 25, 28, 29,
+    10, 11, 14, 15, 26, 27, 30, 31,
+    32, 33, 36, 37, 48, 49, 52, 53,
+    34, 35, 38, 39, 50, 51, 54, 55,
+    40, 41, 44, 45, 56, 57, 60, 61,
+    42, 43, 46, 47, 58, 59, 62, 63,
+};
+
 /**
- * Interleave the lower 3 bits of each coordinate to get the intra-block offsets, which are
- * arranged in a Z-order curve. More details on the bit manipulation at:
- * https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
+ * Lookup the intra-block offset for the specified coordinates in the Morton order (Z-order) lookup table.
+ * @param x X coordinate, must be [0, 7]
+ * @param y Y coordinate, must be [0, 7]
  */
 static inline u32 MortonInterleave(u32 x, u32 y) {
-    u32 i = (x & 7) | ((y & 7) << 8); // ---- -210
-    i = (i ^ (i << 2)) & 0x1313;      // ---2 --10
-    i = (i ^ (i << 1)) & 0x1515;      // ---2 -1-0
-    i = (i | (i >> 7)) & 0x3F;
-    return i;
+    return morton_lut[y * 8 + x];
+}
+
+/**
+ * Copies the texture data from the source address to the destination address,
+ * applying a Morton-order transformation while copying.
+ * @param dst Pointer to which the texture will be copied.
+ * @param src Pointer to the source texture data.
+ * @param width Width of the texture, should be a multiple of 8.
+ * @param height Height of the texture, should be a multiple of 8.
+ * @param T Type of the source and destination pointers, the swizzling process depends on the size of this parameter.
+ */
+template<typename T>
+static inline void CopyTextureAndTile(T* dst, const T* src, unsigned int width, unsigned int height) {
+    for (unsigned int y = 0; y + 8 <= height; y += 8) {
+        for (unsigned int x = 0; x + 8 <= width; x += 8) {
+            const T* line = &src[y * width + x];
+
+            for (unsigned int yy = 0; yy < 8; ++yy) {
+                for (unsigned int xx = 0; xx < 8; ++xx) {
+                    dst[morton_lut[yy * 8 + xx]] = line[xx];
+                }
+                line += width;
+            }
+
+            dst += 8 * 8;
+        }
+    }
 }
 
 /**
@@ -75,7 +110,7 @@ static inline u32 GetMortonOffset(u32 x, u32 y, u32 bytes_per_pixel) {
     const unsigned int block_height = 8;
     const unsigned int coarse_x = x & ~7;
 
-    u32 i = VideoCore::MortonInterleave(x, y);
+    u32 i = VideoCore::MortonInterleave(x & 7, y & 7);
 
     const unsigned int offset = coarse_x * block_height;
 
