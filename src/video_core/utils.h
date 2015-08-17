@@ -68,22 +68,7 @@ static inline u32 MortonInterleave(u32 x, u32 y) {
  * @param height Height of the texture, should be a multiple of 8.
  */
 template<typename T>
-static inline void CopyTextureAndTile(const T* src, T* dst, unsigned int width, unsigned int height) {
-    for (unsigned int y = 0; y + 8 <= height; y += 8) {
-        for (unsigned int x = 0; x + 8 <= width; x += 8) {
-            const T* line = &src[y * width + x];
-
-            for (unsigned int yy = 0; yy < 8; ++yy) {
-                for (unsigned int xx = 0; xx < 8; ++xx) {
-                    dst[morton_lut[yy * 8 + xx]] = line[xx];
-                }
-                line += width;
-            }
-
-            dst += 8 * 8;
-        }
-    }
-}
+void CopyTextureAndTile(const T* src, T* dst, unsigned int width, unsigned int height);
 
 /**
  * Copies texture data while undoing the transformation applied by `CopyTextureAndTile`.
@@ -96,22 +81,7 @@ static inline void CopyTextureAndTile(const T* src, T* dst, unsigned int width, 
  * @param height Height of the texture, should be a multiple of 8.
  */
 template<typename T>
-static inline void CopyTextureAndUntile(const T* src, T* dst, unsigned int width, unsigned int height) {
-    for (unsigned int y = 0; y + 8 <= height; y += 8) {
-        for (unsigned int x = 0; x + 8 <= width; x += 8) {
-            T* line = &dst[y * width + x];
-
-            for (unsigned int yy = 0; yy < 8; ++yy) {
-                for (unsigned int xx = 0; xx < 8; ++xx) {
-                    line[xx] = src[morton_lut[yy * 8 + xx]];
-                }
-                line += width;
-            }
-
-            src += 8 * 8;
-        }
-    }
-}
+void CopyTextureAndUntile(const T* src, T* dst, unsigned int width, unsigned int height);
 
 /**
  * Calculates the offset of the position of the pixel in Morton order
