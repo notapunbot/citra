@@ -62,13 +62,13 @@ static inline u32 MortonInterleave(u32 x, u32 y) {
  *
  * @param T Type of the source and destination pointers, the swizzling process depends on the size
  *        of this parameter.
- * @param dst Pointer to which the texture will be copied.
  * @param src Pointer to the source texture data.
+ * @param dst Pointer to which the texture will be copied.
  * @param width Width of the texture, should be a multiple of 8.
  * @param height Height of the texture, should be a multiple of 8.
  */
 template<typename T>
-static inline void CopyTextureAndTile(T* dst, const T* src, unsigned int width, unsigned int height) {
+static inline void CopyTextureAndTile(const T* src, T* dst, unsigned int width, unsigned int height) {
     for (unsigned int y = 0; y + 8 <= height; y += 8) {
         for (unsigned int x = 0; x + 8 <= width; x += 8) {
             const T* line = &src[y * width + x];
@@ -90,13 +90,13 @@ static inline void CopyTextureAndTile(T* dst, const T* src, unsigned int width, 
  *
  * @param T Type of the source and destination pointers, the swizzling process depends on the size
  *        of this parameter.
- * @param dst Pointer to which the texture will be copied.
  * @param src Pointer to the source texture data.
+ * @param dst Pointer to which the texture will be copied.
  * @param width Width of the texture, should be a multiple of 8.
  * @param height Height of the texture, should be a multiple of 8.
  */
 template<typename T>
-static inline void CopyTextureAndUntile(T* dst, const T* src, unsigned int width, unsigned int height) {
+static inline void CopyTextureAndUntile(const T* src, T* dst, unsigned int width, unsigned int height) {
     for (unsigned int y = 0; y + 8 <= height; y += 8) {
         for (unsigned int x = 0; x + 8 <= width; x += 8) {
             T* line = &dst[y * width + x];

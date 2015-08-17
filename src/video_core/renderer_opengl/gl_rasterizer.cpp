@@ -852,18 +852,18 @@ void RasterizerOpenGL::ReloadColorBuffer() {
     using VideoCore::CopyTextureAndUntile;
     switch (bytes_per_pixel) {
     case 4:
-        CopyTextureAndUntile<u32>(reinterpret_cast<u32*>(temp_fb_color_buffer.get()),
-                reinterpret_cast<u32*>(color_buffer),
+        CopyTextureAndUntile<u32>(reinterpret_cast<u32*>(color_buffer),
+                reinterpret_cast<u32*>(temp_fb_color_buffer.get()),
                 fb_color_texture.width, fb_color_texture.height);
         break;
     case 3:
-        CopyTextureAndUntile<u24_be>(reinterpret_cast<u24_be*>(temp_fb_color_buffer.get()),
-                reinterpret_cast<u24_be*>(color_buffer),
+        CopyTextureAndUntile<u24_be>(reinterpret_cast<u24_be*>(color_buffer),
+                reinterpret_cast<u24_be*>(temp_fb_color_buffer.get()),
                 fb_color_texture.width, fb_color_texture.height);
         break;
     case 2:
-        CopyTextureAndUntile<u16>(reinterpret_cast<u16*>(temp_fb_color_buffer.get()),
-                reinterpret_cast<u16*>(color_buffer),
+        CopyTextureAndUntile<u16>(reinterpret_cast<u16*>(color_buffer),
+                reinterpret_cast<u16*>(temp_fb_color_buffer.get()),
                 fb_color_texture.width, fb_color_texture.height);
         break;
     default:
@@ -975,18 +975,18 @@ void RasterizerOpenGL::CommitColorBuffer() {
             using VideoCore::CopyTextureAndTile;
             switch (bytes_per_pixel) {
             case 4:
-                CopyTextureAndTile<u32>(reinterpret_cast<u32*>(color_buffer),
-                        reinterpret_cast<u32*>(temp_gl_color_buffer.get()),
+                CopyTextureAndTile<u32>(reinterpret_cast<u32*>(temp_gl_color_buffer.get()),
+                        reinterpret_cast<u32*>(color_buffer),
                         fb_color_texture.width, fb_color_texture.height);
                 break;
             case 3:
-                CopyTextureAndTile<u24_be>(reinterpret_cast<u24_be*>(color_buffer),
-                        reinterpret_cast<u24_be*>(temp_gl_color_buffer.get()),
+                CopyTextureAndTile<u24_be>(reinterpret_cast<u24_be*>(temp_gl_color_buffer.get()),
+                        reinterpret_cast<u24_be*>(color_buffer),
                         fb_color_texture.width, fb_color_texture.height);
                 break;
             case 2:
-                CopyTextureAndTile<u16>(reinterpret_cast<u16*>(color_buffer),
-                        reinterpret_cast<u16*>(temp_gl_color_buffer.get()),
+                CopyTextureAndTile<u16>(reinterpret_cast<u16*>(temp_gl_color_buffer.get()),
+                        reinterpret_cast<u16*>(color_buffer),
                         fb_color_texture.width, fb_color_texture.height);
                 break;
             default:
