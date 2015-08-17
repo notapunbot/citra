@@ -102,10 +102,9 @@ void RasterizerOpenGL::InitObjects() {
     glEnableVertexAttribArray(attrib_texcoords + 1);
     glEnableVertexAttribArray(attrib_texcoords + 2);
 
-    // Create textures for OGL framebuffer that will be rendered to, initially 8x8 to succeed in framebuffer creation
-    // 3DS textures' width and height must be multiples of 8
+    // Create textures for OGL framebuffer that will be rendered to, initially 1x1 to succeed in framebuffer creation
     fb_color_texture.texture.Create();
-    ReconfigureColorTexture(fb_color_texture, Pica::Regs::ColorFormat::RGBA8, 8, 8);
+    ReconfigureColorTexture(fb_color_texture, Pica::Regs::ColorFormat::RGBA8, 1, 1);
 
     state.texture_units[0].texture_2d = fb_color_texture.texture.handle;
     state.Apply();

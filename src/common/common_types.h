@@ -50,7 +50,10 @@ typedef double  f64; ///< 64-bit floating point
 typedef u32 VAddr; ///< Represents a pointer in the userspace virtual address space.
 typedef u32 PAddr; ///< Represents a pointer in the ARM11 physical address space.
 
-// A 24-bit storage datatype to make working with data of this size (e.g. RGB8 textures) easier. Not intended for usage in arithmetic.
+/**
+ * A 24-bit storage datatype to make working with data of this size (e.g. RGB8 textures) easier.
+ * Not intended for usage in arithmetic.
+ */
 struct u24_be {
     u8 components[3];
 };
