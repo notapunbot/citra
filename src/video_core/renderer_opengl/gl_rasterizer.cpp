@@ -849,21 +849,25 @@ void RasterizerOpenGL::ReloadColorBuffer() {
     std::unique_ptr<u8[]> temp_fb_color_buffer(new u8[fb_color_texture.width * fb_color_texture.height * bytes_per_pixel]);
 
     // Directly copy pixels. The OpenGL internal formats match the 3DS ones, so no conversion is necessary.
+    using VideoCore::CopyTextureAndUntile;
     switch (bytes_per_pixel) {
     case 4:
-        VideoCore::CopyTextureAndTile<u32>((u32*)temp_fb_color_buffer.get(), (u32*)color_buffer, fb_color_texture.width, fb_color_texture.height);
+        CopyTextureAndUntile<u32>(reinterpret_cast<u32*>(temp_fb_color_buffer.get()),
+                reinterpret_cast<u32*>(color_buffer),
+                fb_color_texture.width, fb_color_texture.height);
         break;
     case 3:
-        VideoCore::CopyTextureAndTile<u24_be>((u24_be*)temp_fb_color_buffer.get(), (u24_be*)color_buffer, fb_color_texture.width, fb_color_texture.height);
+        CopyTextureAndUntile<u24_be>(reinterpret_cast<u24_be*>(temp_fb_color_buffer.get()),
+                reinterpret_cast<u24_be*>(color_buffer),
+                fb_color_texture.width, fb_color_texture.height);
         break;
     case 2:
-        VideoCore::CopyTextureAndTile<u16>((u16*)temp_fb_color_buffer.get(), (u16*)color_buffer, fb_color_texture.width, fb_color_texture.height);
-        break;
-    case 1:
-        VideoCore::CopyTextureAndTile<u8>(temp_fb_color_buffer.get(), color_buffer, fb_color_texture.width, fb_color_texture.height);
+        CopyTextureAndUntile<u16>(reinterpret_cast<u16*>(temp_fb_color_buffer.get()),
+                reinterpret_cast<u16*>(color_buffer),
+                fb_color_texture.width, fb_color_texture.height);
         break;
     default:
-        LOG_ERROR(Render_OpenGL, "Unimplemented pixel size %u bytes per pixel", bytes_per_pixel);
+        UNREACHABLE();
     }
 
     state.texture_units[0].texture_2d = fb_color_texture.texture.handle;
@@ -968,21 +972,25 @@ void RasterizerOpenGL::CommitColorBuffer() {
             state.Apply();
 
             // Directly copy pixels. The OpenGL internal formats match the 3DS ones, so no conversion is necessary.
+            using VideoCore::CopyTextureAndTile;
             switch (bytes_per_pixel) {
             case 4:
-                VideoCore::CopyTextureAndTile<u32>((u32*)color_buffer, (u32*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                CopyTextureAndTile<u32>(reinterpret_cast<u32*>(color_buffer),
+                        reinterpret_cast<u32*>(temp_gl_color_buffer.get()),
+                        fb_color_texture.width, fb_color_texture.height);
                 break;
             case 3:
-                VideoCore::CopyTextureAndTile<u24_be>((u24_be*)color_buffer, (u24_be*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                CopyTextureAndTile<u24_be>(reinterpret_cast<u24_be*>(color_buffer),
+                        reinterpret_cast<u24_be*>(temp_gl_color_buffer.get()),
+                        fb_color_texture.width, fb_color_texture.height);
                 break;
             case 2:
-                VideoCore::CopyTextureAndTile<u16>((u16*)color_buffer, (u16*)temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
-                break;
-            case 1:
-                VideoCore::CopyTextureAndTile<u8>(color_buffer, temp_gl_color_buffer.get(), fb_color_texture.width, fb_color_texture.height);
+                CopyTextureAndTile<u16>(reinterpret_cast<u16*>(color_buffer),
+                        reinterpret_cast<u16*>(temp_gl_color_buffer.get()),
+                        fb_color_texture.width, fb_color_texture.height);
                 break;
             default:
-                LOG_ERROR(Render_OpenGL, "Unimplemented pixel size %u bytes per pixel", bytes_per_pixel);
+                UNREACHABLE();
             }
         }
     }

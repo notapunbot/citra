@@ -37,9 +37,9 @@ void DumpTGA(std::string filename, short width, short height, u8* raw_data);
 
 /// Lookup table for the offsets used to convert an image to Morton order.
 static const u8 morton_lut[64] = {
-    0,  1,  4,  5, 16, 17, 20, 21,
-    2,  3,  6,  7, 18, 19, 22, 23,
-    8,  9, 12, 13, 24, 25, 28, 29,
+     0,  1,  4,  5, 16, 17, 20, 21,
+     2,  3,  6,  7, 18, 19, 22, 23,
+     8,  9, 12, 13, 24, 25, 28, 29,
     10, 11, 14, 15, 26, 27, 30, 31,
     32, 33, 36, 37, 48, 49, 52, 53,
     34, 35, 38, 39, 50, 51, 54, 55,
@@ -57,13 +57,15 @@ static inline u32 MortonInterleave(u32 x, u32 y) {
 }
 
 /**
- * Copies the texture data from the source address to the destination address,
- * applying a Morton-order transformation while copying.
+ * Copies the texture data from the source address to the destination address, applying a
+ * Morton-order transformation while copying.
+ *
+ * @param T Type of the source and destination pointers, the swizzling process depends on the size
+ *        of this parameter.
  * @param dst Pointer to which the texture will be copied.
  * @param src Pointer to the source texture data.
  * @param width Width of the texture, should be a multiple of 8.
  * @param height Height of the texture, should be a multiple of 8.
- * @param T Type of the source and destination pointers, the swizzling process depends on the size of this parameter.
  */
 template<typename T>
 static inline void CopyTextureAndTile(T* dst, const T* src, unsigned int width, unsigned int height) {
@@ -79,6 +81,34 @@ static inline void CopyTextureAndTile(T* dst, const T* src, unsigned int width, 
             }
 
             dst += 8 * 8;
+        }
+    }
+}
+
+/**
+ * Copies texture data while undoing the transformation applied by `CopyTextureAndTile`.
+ *
+ * @param T Type of the source and destination pointers, the swizzling process depends on the size
+ *        of this parameter.
+ * @param dst Pointer to which the texture will be copied.
+ * @param src Pointer to the source texture data.
+ * @param width Width of the texture, should be a multiple of 8.
+ * @param height Height of the texture, should be a multiple of 8.
+ */
+template<typename T>
+static inline void CopyTextureAndUntile(T* dst, const T* src, unsigned int width, unsigned int height) {
+    for (unsigned int y = 0; y + 8 <= height; y += 8) {
+        for (unsigned int x = 0; x + 8 <= width; x += 8) {
+            T* line = &dst[y * width + x];
+
+            for (unsigned int yy = 0; yy < 8; ++yy) {
+                for (unsigned int xx = 0; xx < 8; ++xx) {
+                    line[xx] = src[morton_lut[yy * 8 + xx]];
+                }
+                line += width;
+            }
+
+            src += 8 * 8;
         }
     }
 }
