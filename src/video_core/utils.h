@@ -60,28 +60,26 @@ static inline u32 MortonInterleave(u32 x, u32 y) {
  * Copies the texture data from the source address to the destination address, applying a
  * Morton-order transformation while copying.
  *
- * @param T Type of the source and destination pointers, the swizzling process depends on the size
- *        of this parameter.
+ * @param T Byte size of a pixel in the source and destination pointers.
  * @param src Pointer to the source texture data.
  * @param dst Pointer to which the texture will be copied.
  * @param width Width of the texture, should be a multiple of 8.
  * @param height Height of the texture, should be a multiple of 8.
  */
-template<typename T>
-void CopyTextureAndTile(const T* src, T* dst, unsigned int width, unsigned int height);
+template<int size>
+void CopyTextureAndTile(const u8* src, u8* dst, unsigned int width, unsigned int height);
 
 /**
  * Copies texture data while undoing the transformation applied by `CopyTextureAndTile`.
  *
- * @param T Type of the source and destination pointers, the swizzling process depends on the size
- *        of this parameter.
+ * @param T Byte size of a pixel in the source and destination pointers.
  * @param src Pointer to the source texture data.
  * @param dst Pointer to which the texture will be copied.
  * @param width Width of the texture, should be a multiple of 8.
  * @param height Height of the texture, should be a multiple of 8.
  */
-template<typename T>
-void CopyTextureAndUntile(const T* src, T* dst, unsigned int width, unsigned int height);
+template<int size>
+void CopyTextureAndUntile(const u8* src, u8* dst, unsigned int width, unsigned int height);
 
 /**
  * Calculates the offset of the position of the pixel in Morton order

@@ -34,15 +34,15 @@ void DumpTGA(std::string filename, short width, short height, u8* raw_data) {
     fclose(fout);
 }
 
-template<typename T>
-void CopyTextureAndTile(const T* src, T* dst, unsigned int width, unsigned int height) {
+template<int size>
+void CopyTextureAndTile(const u8* src, u8* dst, unsigned int width, unsigned int height) {
     for (unsigned int y = 0; y + 8 <= height; y += 8) {
         for (unsigned int x = 0; x + 8 <= width; x += 8) {
-            const T* line = &src[y * width + x];
+            const u8* line = &src[y * width + x];
 
             for (unsigned int yy = 0; yy < 8; ++yy) {
                 for (unsigned int xx = 0; xx < 8; ++xx) {
-                    dst[morton_lut[yy * 8 + xx]] = line[xx];
+                    memcpy(dst + size * morton_lut[yy * 8 + xx], line + size * xx, size);
                 }
                 line += width;
             }
@@ -52,19 +52,19 @@ void CopyTextureAndTile(const T* src, T* dst, unsigned int width, unsigned int h
     }
 }
 
-template void CopyTextureAndTile<u16>(const u16* src, u16* dst, unsigned int width, unsigned int height);
-template void CopyTextureAndTile<u24_be>(const u24_be* src, u24_be* dst, unsigned int width, unsigned int height);
-template void CopyTextureAndTile<u32>(const u32* src, u32* dst, unsigned int width, unsigned int height);
+template void CopyTextureAndTile<2>(const u8* src, u8* dst, unsigned int width, unsigned int height);
+template void CopyTextureAndTile<3>(const u8* src, u8* dst, unsigned int width, unsigned int height);
+template void CopyTextureAndTile<4>(const u8* src, u8* dst, unsigned int width, unsigned int height);
 
-template<typename T>
-void CopyTextureAndUntile(const T* src, T* dst, unsigned int width, unsigned int height) {
+template<int size>
+void CopyTextureAndUntile(const u8* src, u8* dst, unsigned int width, unsigned int height) {
     for (unsigned int y = 0; y + 8 <= height; y += 8) {
         for (unsigned int x = 0; x + 8 <= width; x += 8) {
-            T* line = &dst[y * width + x];
+            u8* line = &dst[y * width + x];
 
             for (unsigned int yy = 0; yy < 8; ++yy) {
                 for (unsigned int xx = 0; xx < 8; ++xx) {
-                    line[xx] = src[morton_lut[yy * 8 + xx]];
+                    memcpy(line + size * xx, src + size * morton_lut[yy * 8 + xx], size);
                 }
                 line += width;
             }
@@ -74,8 +74,8 @@ void CopyTextureAndUntile(const T* src, T* dst, unsigned int width, unsigned int
     }
 }
 
-template void CopyTextureAndUntile<u16>(const u16* src, u16* dst, unsigned int width, unsigned int height);
-template void CopyTextureAndUntile<u24_be>(const u24_be* src, u24_be* dst, unsigned int width, unsigned int height);
-template void CopyTextureAndUntile<u32>(const u32* src, u32* dst, unsigned int width, unsigned int height);
+template void CopyTextureAndUntile<2>(const u8* src, u8* dst, unsigned int width, unsigned int height);
+template void CopyTextureAndUntile<3>(const u8* src, u8* dst, unsigned int width, unsigned int height);
+template void CopyTextureAndUntile<4>(const u8* src, u8* dst, unsigned int width, unsigned int height);
 
 } // namespace
