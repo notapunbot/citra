@@ -28,6 +28,7 @@ std::string Regs::GetCommandName(int index) {
         ADD_FIELD(viewport_size_y);
         ADD_FIELD(viewport_depth_range);
         ADD_FIELD(viewport_depth_far_plane);
+        ADD_FIELD(scissor_test);
         ADD_FIELD(viewport_corner);
         ADD_FIELD(texture0_enable);
         ADD_FIELD(texture0);
