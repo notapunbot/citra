@@ -150,6 +150,8 @@ void RasterizerOpenGL::DrawTriangles() {
     SyncFramebuffer();
     SyncDrawState();
 
+    SyncScissorTest();
+
     if (state.draw.shader_dirty) {
         SetShader();
         state.draw.shader_dirty = false;
@@ -220,6 +222,11 @@ void RasterizerOpenGL::NotifyPicaRegisterChanged(u32 id) {
     // Depth test
     case PICA_REG_INDEX(output_merger.depth_test_enable):
         SyncDepthTest();
+        break;
+
+    // Scissor test
+    case PICA_REG_INDEX(scissor_test.mode):
+        state.draw.shader_dirty = true;
         break;
 
     // Logic op
@@ -499,6 +506,7 @@ void RasterizerOpenGL::SetShader() {
     // Update uniforms
     SyncAlphaTest();
     SyncCombinerColor();
+    SyncScissorTest();
     auto& tev_stages = Pica::g_state.regs.GetTevStages();
     for (int index = 0; index < tev_stages.size(); ++index)
         SyncTevConstColor(index, tev_stages[index]);
@@ -655,6 +663,32 @@ void RasterizerOpenGL::SyncDepthTest() {
     state.color_mask.blue_enabled = regs.output_merger.blue_enable;
     state.color_mask.alpha_enabled = regs.output_merger.alpha_enable;
     state.depth.write_mask = regs.output_merger.depth_write_enable ? GL_TRUE : GL_FALSE;
+}
+
+void RasterizerOpenGL::SyncScissorTest() {
+    const auto& regs = Pica::g_state.regs;
+
+    GLsizei viewport_height = (GLsizei)Pica::float24::FromRawFloat24(regs.viewport_size_y).ToFloat32() * 2;
+
+    GLsizei viewport_corner_y = -(GLsizei)static_cast<float>(regs.viewport_corner.y)
+                                + regs.framebuffer.GetHeight() - viewport_height;
+
+    // OpenGL uses different y coordinates, so negate corner offset and flip origin
+    GLint scissor_bottom = viewport_height - (GLsizei)regs.scissor_test.bottom + viewport_corner_y;
+
+    GLint scissor_top = viewport_height - (GLsizei)regs.scissor_test.top - 1;
+
+    if (uniform_block_data.data.scissor_right != regs.scissor_test.right ||
+        uniform_block_data.data.scissor_bottom != scissor_bottom ||
+        uniform_block_data.data.scissor_left != regs.scissor_test.left + 1 ||
+        uniform_block_data.data.scissor_top != scissor_top) {
+
+        uniform_block_data.data.scissor_right = regs.scissor_test.right;
+        uniform_block_data.data.scissor_bottom = scissor_bottom;
+        uniform_block_data.data.scissor_left = regs.scissor_test.left + 1;
+        uniform_block_data.data.scissor_top = scissor_top;
+        uniform_block_data.dirty = true;
+    }
 }
 
 void RasterizerOpenGL::SyncCombinerColor() {

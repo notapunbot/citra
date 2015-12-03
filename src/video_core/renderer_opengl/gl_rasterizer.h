@@ -36,6 +36,8 @@ struct PicaShaderConfig {
         res.alpha_test_func = regs.output_merger.alpha_test.enable ?
             regs.output_merger.alpha_test.func.Value() : Pica::Regs::CompareFunc::Always;
 
+        res.scissor_test_mode = regs.scissor_test.mode;
+
         // Copy relevant TevStageConfig fields only. We're doing this manually (instead of calling
         // the GetTevStages() function) because BitField explicitly disables copies.
 
@@ -87,6 +89,7 @@ struct PicaShaderConfig {
     };
 
     Pica::Regs::CompareFunc alpha_test_func;
+    Pica::Regs::ScissorMode scissor_test_mode;
     std::array<Pica::Regs::TevStageConfig, 6> tev_stages = {};
     u8 combiner_buffer_input;
 };
@@ -191,16 +194,19 @@ private:
         GLfloat tex_coord2[2];
     };
 
-    /// Uniform structure for the Uniform Buffer Object, all members must be 16-byte aligned
+    /// Uniform structure for the Uniform Buffer Object, all members must be aligned as per the OpenGL std140 layout specification
     struct UniformData {
         // A vec4 color for each of the six tev stages
         std::array<GLfloat, 4> const_color[6];
         std::array<GLfloat, 4> tev_combiner_buffer_color;
         GLint alphatest_ref;
-        INSERT_PADDING_BYTES(12);
+        GLint scissor_right;
+        GLint scissor_bottom;
+        GLint scissor_left;
+        GLint scissor_top;
     };
 
-    static_assert(sizeof(UniformData) == 0x80, "The size of the UniformData structure has changed, update the structure in the shader");
+    static_assert(sizeof(UniformData) == 0x84, "The size of the UniformData structure has changed, update the structure in the shader");
     static_assert(sizeof(UniformData) < 16000, "UniformData structure must be less than 16kb as per the OpenGL spec");
 
     /// Reconfigure the OpenGL color texture to use the given format and dimensions
@@ -238,6 +244,9 @@ private:
 
     /// Syncs the depth test states to match the PICA register
     void SyncDepthTest();
+
+    /// Syncs the scissor test state to match the PICA register
+    void SyncScissorTest();
 
     /// Syncs the TEV constant color to match the PICA register
     void SyncTevConstColor(int tev_index, const Pica::Regs::TevStageConfig& tev_stage);

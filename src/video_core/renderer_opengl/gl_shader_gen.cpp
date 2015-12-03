@@ -327,6 +327,7 @@ std::string GenerateFragmentShader(const PicaShaderConfig& config) {
 
 in vec4 primary_color;
 in vec2 texcoord[3];
+in vec4 gl_FragCoord;
 
 out vec4 color;
 
@@ -334,12 +335,26 @@ layout (std140) uniform shader_data {
     vec4 const_color[NUM_TEV_STAGES];
     vec4 tev_combiner_buffer_color;
     int alphatest_ref;
+    int scissor_right;
+    int scissor_bottom;
+    int scissor_left;
+    int scissor_top;
 };
 
 uniform sampler2D tex[3];
 
 void main() {
 )";
+
+    // Append the scissor test
+    if (config.scissor_test_mode == Regs::ScissorMode::Include || config.scissor_test_mode == Regs::ScissorMode::Exclude) {
+        out += "if (scissor_left <= scissor_right || scissor_top >= scissor_bottom) discard;\n";
+        out += "if (";
+        // Negate the condition if we have to keep only the pixels outside the scissor box
+        if (config.scissor_test_mode == Regs::ScissorMode::Include)
+            out += "!";
+        out += "(gl_FragCoord.x >= scissor_right && gl_FragCoord.x <= scissor_left && gl_FragCoord.y >= scissor_top && gl_FragCoord.y <= scissor_bottom)) discard;\n";
+    }
 
     // Do not do any sort of processing if it's obvious we're not going to pass the alpha test
     if (config.alpha_test_func == Regs::CompareFunc::Never) {
