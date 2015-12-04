@@ -346,6 +346,12 @@ uniform sampler2D tex[3];
 void main() {
 )";
 
+    // Do not do any sort of processing if it's obvious we're not going to pass the alpha test
+    if (config.alpha_test_func == Regs::CompareFunc::Never) {
+        out += "discard; }";
+        return out;
+    }
+
     // Append the scissor test
     if (config.scissor_test_mode == Regs::ScissorMode::Include || config.scissor_test_mode == Regs::ScissorMode::Exclude) {
         out += "if (scissor_left <= scissor_right || scissor_top >= scissor_bottom) discard;\n";
@@ -354,12 +360,6 @@ void main() {
         if (config.scissor_test_mode == Regs::ScissorMode::Include)
             out += "!";
         out += "(gl_FragCoord.x >= scissor_right && gl_FragCoord.x <= scissor_left && gl_FragCoord.y >= scissor_top && gl_FragCoord.y <= scissor_bottom)) discard;\n";
-    }
-
-    // Do not do any sort of processing if it's obvious we're not going to pass the alpha test
-    if (config.alpha_test_func == Regs::CompareFunc::Never) {
-        out += "discard; }";
-        return out;
     }
 
     out += "vec4 combiner_buffer = vec4(0.0);\n";

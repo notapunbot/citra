@@ -393,10 +393,10 @@ static void ProcessTriangleInternal(const Shader::OutputVertex& v0,
         for (u16 x = min_x + 8; x < max_x; x += 0x10) {
 
             // Do not process the pixel if it's inside the scissor box and the scissor mode is set to Exclude
-            if (regs.scissor_test.mode == Regs::ScissorMode::Exclude) {
-                if (x >= scissor_x && x <= scissor_x + scissor_width &&
-                    y >= scissor_y && y <= scissor_y + scissor_height)
-                    continue;
+            if (regs.scissor_test.mode == Regs::ScissorMode::Exclude &&
+                x >= scissor_x && x <= scissor_x + scissor_width &&
+                y >= scissor_y && y <= scissor_y + scissor_height) {
+                continue;
             }
 
             // Calculate the barycentric coordinates w0, w1 and w2
