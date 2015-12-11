@@ -354,12 +354,12 @@ void main() {
 
     // Append the scissor test
     if (config.scissor_test_mode == Regs::ScissorMode::Include || config.scissor_test_mode == Regs::ScissorMode::Exclude) {
-        out += "if (scissor_left <= scissor_right || scissor_top >= scissor_bottom) discard;\n";
+        out += "if (scissor_left <= scissor_right || scissor_top <= scissor_bottom) discard;\n";
         out += "if (";
         // Negate the condition if we have to keep only the pixels outside the scissor box
         if (config.scissor_test_mode == Regs::ScissorMode::Include)
             out += "!";
-        out += "(gl_FragCoord.x >= scissor_right && gl_FragCoord.x <= scissor_left && gl_FragCoord.y >= scissor_top && gl_FragCoord.y <= scissor_bottom)) discard;\n";
+        out += "(gl_FragCoord.x >= scissor_right && gl_FragCoord.x <= scissor_left && gl_FragCoord.y >= scissor_bottom && gl_FragCoord.y <= scissor_top)) discard;\n";
     }
 
     out += "vec4 combiner_buffer = vec4(0.0);\n";

@@ -150,8 +150,6 @@ void RasterizerOpenGL::DrawTriangles() {
     SyncFramebuffer();
     SyncDrawState();
 
-    SyncScissorTest();
-
     if (state.draw.shader_dirty) {
         SetShader();
         state.draw.shader_dirty = false;
@@ -227,6 +225,10 @@ void RasterizerOpenGL::NotifyPicaRegisterChanged(u32 id) {
     // Scissor test
     case PICA_REG_INDEX(scissor_test.mode):
         state.draw.shader_dirty = true;
+        break;
+    case PICA_REG_INDEX(scissor_test.right):
+    case PICA_REG_INDEX(scissor_test.left):
+        SyncScissorTest();
         break;
 
     // Logic op
@@ -668,25 +670,15 @@ void RasterizerOpenGL::SyncDepthTest() {
 void RasterizerOpenGL::SyncScissorTest() {
     const auto& regs = Pica::g_state.regs;
 
-    GLsizei viewport_height = (GLsizei)Pica::float24::FromRawFloat24(regs.viewport_size_y).ToFloat32() * 2;
-
-    GLsizei viewport_corner_y = -(GLsizei)static_cast<float>(regs.viewport_corner.y)
-                                + regs.framebuffer.GetHeight() - viewport_height;
-
-    // OpenGL uses different y coordinates, so negate corner offset and flip origin
-    GLint scissor_bottom = viewport_height - (GLsizei)regs.scissor_test.bottom + viewport_corner_y;
-
-    GLint scissor_top = viewport_height - (GLsizei)regs.scissor_test.top - 1;
-
     if (uniform_block_data.data.scissor_right != regs.scissor_test.right ||
-        uniform_block_data.data.scissor_bottom != scissor_bottom ||
+        uniform_block_data.data.scissor_bottom != regs.scissor_test.bottom ||
         uniform_block_data.data.scissor_left != regs.scissor_test.left + 1 ||
-        uniform_block_data.data.scissor_top != scissor_top) {
+        uniform_block_data.data.scissor_top != regs.scissor_test.top + 1) {
 
         uniform_block_data.data.scissor_right = regs.scissor_test.right;
-        uniform_block_data.data.scissor_bottom = scissor_bottom;
+        uniform_block_data.data.scissor_bottom = regs.scissor_test.bottom;
         uniform_block_data.data.scissor_left = regs.scissor_test.left + 1;
-        uniform_block_data.data.scissor_top = scissor_top;
+        uniform_block_data.data.scissor_top = regs.scissor_test.top + 1;
         uniform_block_data.dirty = true;
     }
 }
@@ -714,8 +706,6 @@ void RasterizerOpenGL::SyncDrawState() {
     GLsizei viewport_width = (GLsizei)Pica::float24::FromRawFloat24(regs.viewport_size_x).ToFloat32() * 2;
     GLsizei viewport_height = (GLsizei)Pica::float24::FromRawFloat24(regs.viewport_size_y).ToFloat32() * 2;
 
-    // OpenGL uses different y coordinates, so negate corner offset and flip origin
-    // TODO: Ensure viewport_corner.x should not be negated or origin flipped
     // TODO: Use floating-point viewports for accuracy if supported
     glViewport((GLsizei)regs.viewport_corner.x,
                (GLsizei)regs.viewport_corner.y,
