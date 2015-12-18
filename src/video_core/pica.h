@@ -130,16 +130,16 @@ struct Regs {
         };
 
         union {
-            BitField< 0, 16, u32> left;
-            BitField<16, 16, u32> top;
+            BitField< 0, 16, u32> left_minus_1;
+            BitField<16, 16, u32> top_minus_1;
         };
 
-        u32 GetWidth() const {
-            return left - right + 1;
+        u32 GetTop() const {
+            return top_minus_1 + 1;
         }
 
-        u32 GetHeight() const {
-            return top - bottom + 1;
+        u32 GetLeft() const {
+            return left_minus_1 + 1;
         }
     } scissor_test;
 

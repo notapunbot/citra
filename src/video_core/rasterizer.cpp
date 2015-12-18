@@ -340,17 +340,17 @@ static void ProcessTriangleInternal(const Shader::OutputVertex& v0,
     u16 max_y = std::max({vtxpos[0].y, vtxpos[1].y, vtxpos[2].y});
 
     // Convert the scissor box coordinates to 12.4 fixed point
-    u16 scissor_width = (u16)(regs.scissor_test.GetWidth() << 4);
-    u16 scissor_height = (u16)(regs.scissor_test.GetHeight() << 4);
-    u16 scissor_x = (u16)(regs.scissor_test.right << 4);
-    u16 scissor_y = (u16)(regs.scissor_test.bottom << 4);
+    u16 scissor_left = (u16)(regs.scissor_test.GetLeft() << 4);
+    u16 scissor_top = (u16)(regs.scissor_test.GetTop() << 4);
+    u16 scissor_right = (u16)(regs.scissor_test.right << 4);
+    u16 scissor_bottom = (u16)(regs.scissor_test.bottom << 4);
 
     if (regs.scissor_test.mode == Regs::ScissorMode::Include) {
         // Calculate the new bounds
-        min_x = std::max(min_x, scissor_x);
-        min_y = std::max(min_y, scissor_y);
-        max_x = std::min(max_x, (u16)(scissor_x + scissor_width));
-        max_y = std::min(max_y, (u16)(scissor_y + scissor_height));
+        min_x = std::max(min_x, scissor_right);
+        min_y = std::max(min_y, scissor_bottom);
+        max_x = std::min(max_x, scissor_left);
+        max_y = std::min(max_y, scissor_top);
     }
 
     min_x &= Fix12P4::IntMask();
@@ -394,8 +394,8 @@ static void ProcessTriangleInternal(const Shader::OutputVertex& v0,
 
             // Do not process the pixel if it's inside the scissor box and the scissor mode is set to Exclude
             if (regs.scissor_test.mode == Regs::ScissorMode::Exclude &&
-                x >= scissor_x && x <= scissor_x + scissor_width &&
-                y >= scissor_y && y <= scissor_y + scissor_height) {
+                x >= scissor_right && x <= scissor_left &&
+                y >= scissor_bottom && y <= scissor_top) {
                 continue;
             }
 
