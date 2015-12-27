@@ -8,14 +8,24 @@
 #include "core/hle/kernel/event.h"
 #include "core/hle/service/dsp_dsp.h"
 
+#include <unordered_map>
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Namespace DSP_DSP
 
 namespace DSP_DSP {
 
+struct PairHash {
+public:
+    template <typename T, typename U>
+    std::size_t operator()(const std::pair<T, U> &x) const {
+        return std::hash<T>()(x.first) ^ std::hash<U>()(x.second);
+    }
+};
+
 static u32 read_pipe_count;
 static Kernel::SharedPtr<Kernel::Event> semaphore_event;
-static Kernel::SharedPtr<Kernel::Event> interrupt_event;
+static std::unordered_map<std::pair<u32, u32>, Kernel::SharedPtr<Kernel::Event>, PairHash> interrupt_events;
 
 void SignalInterrupt() {
     // TODO(bunnei): This is just a stub, it does not do anything other than signal to the emulated
@@ -24,8 +34,8 @@ void SignalInterrupt() {
     // that check the DSP interrupt signal event to run. We should figure out the different types of
     // DSP interrupts, and trigger them at the appropriate times.
 
-    if (interrupt_event != 0)
-        interrupt_event->Signal();
+    for (auto interrupt_event : interrupt_events)
+        interrupt_event.second->Signal();
 }
 
 /**
@@ -122,8 +132,8 @@ static void FlushDataCache(Service::Interface* self) {
 /**
  * DSP_DSP::RegisterInterruptEvents service function
  *  Inputs:
- *      1 : Parameter 0 (purpose unknown)
- *      2 : Parameter 1 (purpose unknown)
+ *      1 : Interrupt
+ *      2 : Channel
  *      4 : Interrupt event handle
  *  Outputs:
  *      1 : Result of function, 0 on success, otherwise error code
@@ -131,22 +141,28 @@ static void FlushDataCache(Service::Interface* self) {
 static void RegisterInterruptEvents(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
 
-    u32 param0 = cmd_buff[1];
-    u32 param1 = cmd_buff[2];
+    u32 interrupt = cmd_buff[1];
+    u32 channel = cmd_buff[2];
     u32 event_handle = cmd_buff[4];
 
-    auto evt = Kernel::g_handle_table.Get<Kernel::Event>(cmd_buff[4]);
-    if (evt != nullptr) {
-        interrupt_event = evt;
-        cmd_buff[1] = 0; // No error
+    if (!event_handle) {
+        // Unregister the event for this interrupt and channel
+        interrupt_events.erase(std::make_pair(interrupt, channel));
+        cmd_buff[1] = RESULT_SUCCESS.raw;
     } else {
-        LOG_ERROR(Service_DSP, "called with invalid handle=%08X", cmd_buff[4]);
+        auto evt = Kernel::g_handle_table.Get<Kernel::Event>(event_handle);
+        if (evt != nullptr) {
+            interrupt_events[std::make_pair(interrupt, channel)] = evt;
+            cmd_buff[1] = RESULT_SUCCESS.raw; // No error
+        } else {
+            LOG_ERROR(Service_DSP, "called with invalid handle=%08X", event_handle);
 
-        // TODO(yuriks): An error should be returned from SendSyncRequest, not in the cmdbuf
-        cmd_buff[1] = -1;
+            // TODO(yuriks): An error should be returned from SendSyncRequest, not in the cmdbuf
+            cmd_buff[1] = -1;
+        }
     }
 
-    LOG_WARNING(Service_DSP, "(STUBBED) called param0=%u, param1=%u, event_handle=0x%08X", param0, param1, event_handle);
+    LOG_WARNING(Service_DSP, "(STUBBED) called interrupt=%u, channel=%u, event_handle=0x%08X", interrupt, channel, event_handle);
 }
 
 /**
@@ -304,7 +320,7 @@ const Interface::FunctionInfo FunctionTable[] = {
 
 Interface::Interface() {
     semaphore_event = Kernel::Event::Create(RESETTYPE_ONESHOT, "DSP_DSP::semaphore_event");
-    interrupt_event = nullptr;
+    interrupt_events.clear();
     read_pipe_count = 0;
 
     Register(FunctionTable);
@@ -312,7 +328,7 @@ Interface::Interface() {
 
 Interface::~Interface() {
     semaphore_event = nullptr;
-    interrupt_event = nullptr;
+    interrupt_events.clear();
 }
 
 } // namespace
