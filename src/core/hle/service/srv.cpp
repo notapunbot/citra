@@ -40,7 +40,8 @@ static void GetServiceHandle(Service::Interface* self) {
     auto it = Service::g_srv_services.find(port_name);
 
     if (it != Service::g_srv_services.end()) {
-        cmd_buff[3] = Kernel::g_handle_table.Create(it->second).MoveFrom();
+        auto client_session = it->second->CreateSession();
+        cmd_buff[3] = Kernel::g_handle_table.Create(client_session).MoveFrom();
         LOG_TRACE(Service_SRV, "called port=%s, handle=0x%08X", port_name.c_str(), cmd_buff[3]);
     } else {
         LOG_ERROR(Service_SRV, "(UNIMPLEMENTED) called port=%s", port_name.c_str());
@@ -49,10 +50,31 @@ static void GetServiceHandle(Service::Interface* self) {
     cmd_buff[1] = res.raw;
 }
 
+static void RegisterService(Service::Interface* self) {
+    ResultCode res = RESULT_SUCCESS;
+    u32* cmd_buff = Kernel::GetCommandBuffer();
+
+    u32 max_sessions = cmd_buff[4];
+    std::string port_name = std::string((const char*)&cmd_buff[1], 0, std::min<u32>(cmd_buff[3], Service::kMaxPortSize));
+    auto it = Service::g_srv_services.find(port_name);
+
+    if (it != Service::g_srv_services.end()) {
+        LOG_ERROR(Service_SRV, "(UNIMPLEMENTED) called port=%s already exists", port_name.c_str());
+        res = UnimplementedFunction(ErrorModule::SRV);
+    } else {
+        LOG_TRACE(Service_SRV, "called port=%s, handle=0x%08X", port_name.c_str(), cmd_buff[3]);
+        auto server_port = Kernel::ServerPort::Create(port_name, max_sessions);
+        Service::g_srv_services.emplace(port_name, server_port);
+        cmd_buff[3] = Kernel::g_handle_table.Create(server_port).MoveFrom();
+    }
+
+    cmd_buff[1] = res.raw;
+}
+
 const Interface::FunctionInfo FunctionTable[] = {
     {0x00010002, Initialize,          "Initialize"},
     {0x00020000, GetProcSemaphore,    "GetProcSemaphore"},
-    {0x00030100, nullptr,             "RegisterService"},
+    {0x00030100, RegisterService,     "RegisterService"},
     {0x000400C0, nullptr,             "UnregisterService"},
     {0x00050100, GetServiceHandle,    "GetServiceHandle"},
     {0x000600C2, nullptr,             "RegisterHandle"},

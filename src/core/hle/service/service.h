@@ -23,13 +23,11 @@ namespace Service {
 static const int kMaxPortSize = 8; ///< Maximum size of a port name (8 characters)
 
 /// Interface to a CTROS service
-class Interface : public Kernel::Session {
+class Interface : public Kernel::ServerPort {
     // TODO(yuriks): An "Interface" being a Kernel::Object is mostly non-sense. Interface should be
     // just something that encapsulates a session and acts as a helper to implement service
     // processes.
 public:
-    std::string GetName() const override { return GetPortName(); }
-
     typedef void (*Function)(Interface*);
 
     struct FunctionInfo {
@@ -38,15 +36,9 @@ public:
         const char* name;
     };
 
-    /**
-     * Gets the string name used by CTROS for a service
-     * @return Port name of service
-     */
-    virtual std::string GetPortName() const {
-        return "[UNKNOWN SERVICE PORT]";
-    }
-
     ResultVal<bool> SyncRequest() override;
+
+    bool IsHLE() const override { return true; }
 
 protected:
 
@@ -72,11 +64,11 @@ void Init();
 void Shutdown();
 
 /// Map of named ports managed by the kernel, which can be retrieved using the ConnectToPort SVC.
-extern std::unordered_map<std::string, Kernel::SharedPtr<Interface>> g_kernel_named_ports;
+extern std::unordered_map<std::string, Kernel::SharedPtr<Kernel::ServerPort>> g_kernel_named_ports;
 /// Map of services registered with the "srv:" service, retrieved using GetServiceHandle.
-extern std::unordered_map<std::string, Kernel::SharedPtr<Interface>> g_srv_services;
+extern std::unordered_map<std::string, Kernel::SharedPtr<Kernel::ServerPort>> g_srv_services;
 
 /// Adds a service to the services table
-void AddService(Interface* interface_);
+void AddService(Kernel::ServerPort* interface_);
 
 } // namespace

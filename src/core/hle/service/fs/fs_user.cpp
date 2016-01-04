@@ -18,7 +18,7 @@
 // Namespace FS_User
 
 using Kernel::SharedPtr;
-using Kernel::Session;
+using Kernel::ClientSession;
 
 namespace Service {
 namespace FS {

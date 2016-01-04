@@ -46,7 +46,7 @@ enum class MediaType : u32 {
 
 typedef u64 ArchiveHandle;
 
-class File : public Kernel::Session {
+class File : public Kernel::ClientSession {
 public:
     File(std::unique_ptr<FileSys::FileBackend>&& backend, const FileSys::Path& path);
     ~File();
@@ -59,7 +59,7 @@ public:
     std::unique_ptr<FileSys::FileBackend> backend; ///< File backend interface
 };
 
-class Directory : public Kernel::Session {
+class Directory : public Kernel::ClientSession {
 public:
     Directory(std::unique_ptr<FileSys::DirectoryBackend>&& backend, const FileSys::Path& path);
     ~Directory();

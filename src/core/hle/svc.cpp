@@ -199,13 +199,15 @@ static ResultCode ConnectToPort(Handle* out_handle, const char* port_name) {
         return ERR_NOT_FOUND;
     }
 
-    CASCADE_RESULT(*out_handle, Kernel::g_handle_table.Create(it->second));
+    // TODO(Subv): This should return a ClientPort, not a ClientSession
+    auto session = it->second->CreateSession();
+    CASCADE_RESULT(*out_handle, Kernel::g_handle_table.Create(session));
     return RESULT_SUCCESS;
 }
 
 /// Synchronize to an OS service
 static ResultCode SendSyncRequest(Handle handle) {
-    SharedPtr<Kernel::Session> session = Kernel::g_handle_table.Get<Kernel::Session>(handle);
+    SharedPtr<Kernel::ClientSession> session = Kernel::g_handle_table.Get<Kernel::ClientSession>(handle);
     if (session == nullptr) {
         return ERR_INVALID_HANDLE;
     }

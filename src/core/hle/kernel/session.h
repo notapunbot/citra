@@ -10,6 +10,7 @@
 #include "common/common_types.h"
 
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/result.h"
 #include "core/memory.h"
@@ -64,6 +65,28 @@ inline static u32* GetCommandBuffer(const int offset = 0) {
     return (u32*)Memory::GetPointer(GetCurrentThread()->GetTLSAddress() + kCommandHeaderOffset + offset);
 }
 
+class ServerSession : public WaitObject {
+public:
+    std::string GetTypeName() const override { return "ServerSession"; }
+
+    static const HandleType HANDLE_TYPE = HandleType::ServerSession;
+    HandleType GetHandleType() const override { return HANDLE_TYPE; }
+
+    bool ShouldWait() override {
+        return !data_ready;
+    }
+
+    void Acquire() override {
+        data_ready = false;
+    }
+
+    bool data_ready;
+    SharedPtr<Thread> handler_thread;
+    SharedPtr<Thread> waiting_thread;
+};
+
+class ServerPort;
+
 /**
  * Kernel object representing the client endpoint of an IPC session. Sessions are the basic CTR-OS
  * primitive for communication between different processes, and are used to implement service calls
@@ -86,21 +109,21 @@ inline static u32* GetCommandBuffer(const int offset = 0) {
  * CTR-OS so that IPC calls can be optionally handled by the real implementations of processes, as
  * opposed to HLE simulations.
  */
-class Session : public WaitObject {
+class ClientSession : public WaitObject {
 public:
-    Session();
-    ~Session() override;
+    ClientSession();
+    ~ClientSession() override;
 
-    std::string GetTypeName() const override { return "Session"; }
+    std::string GetTypeName() const override { return "ClientSession"; }
 
-    static const HandleType HANDLE_TYPE = HandleType::Session;
+    static const HandleType HANDLE_TYPE = HandleType::ClientSession;
     HandleType GetHandleType() const override { return HANDLE_TYPE; }
 
     /**
      * Handles a synchronous call to this session using HLE emulation. Emulated <-> emulated calls
      * aren't supported yet.
      */
-    virtual ResultVal<bool> SyncRequest() = 0;
+    virtual ResultVal<bool> SyncRequest();
 
     // TODO(bunnei): These functions exist to satisfy a hardware test with a Session object
     // passed into WaitSynchronization. Figure out the meaning of them.
@@ -112,6 +135,50 @@ public:
     void Acquire() override {
         ASSERT_MSG(!ShouldWait(), "object unavailable!");
     }
+
+    SharedPtr<ServerSession> server_session;
+    SharedPtr<ServerPort> hle_port;
+};
+
+class ServerPort : public WaitObject {
+public:
+    std::string GetTypeName() const override { return "ServerPort"; }
+
+    static const HandleType HANDLE_TYPE = HandleType::ServerPort;
+    HandleType GetHandleType() const override { return HANDLE_TYPE; }
+
+    /**
+    * Gets the string name used by CTROS for a service
+    * @return Port name of service
+    */
+    virtual std::string GetPortName() const {
+        return name;
+    }
+
+    virtual ResultVal<bool> SyncRequest();
+
+    std::string GetName() const override { return GetPortName(); }
+
+    static SharedPtr<ServerPort> Create(const std::string& name, u32 max_sessions);
+
+    SharedPtr<ClientSession> CreateSession();
+
+    virtual bool IsHLE() const { return false; }
+
+    bool ShouldWait() override {
+        return pending_sessions.empty();
+    }
+
+    void Acquire() override {
+
+    }
+
+private:
+    std::string name;
+    SharedPtr<Process> owner_process;
+    u32 max_sessions;
+
+    std::vector<SharedPtr<ServerSession>> pending_sessions;
 };
 
 }
