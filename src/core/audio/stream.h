@@ -10,7 +10,6 @@
 
 namespace Audio {
     void Init();
-    void Play(void* buf, size_t size);
     void Shutdown();
 
     enum Format : u16 {
@@ -19,7 +18,10 @@ namespace Audio {
         FORMAT_ADPCM = 2
     };
 
-    void UpdateFormat(int chanid, int mono_or_stereo, Format format);
+    void UpdateFormat(int chanid, int mono_or_stereo, Format format, int rest);
+    void UpdateAdpcm(int chanid, s16 coeffs[16]);
+
+    void Play(int chanid, bool play);
 
     void EnqueueBuffer(int chanid, u16 buffer_id,
         void* data, int sample_count,

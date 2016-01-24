@@ -111,7 +111,12 @@ struct ChannelContext {
     u32 dirty;
 
     // Effects
-    INSERT_PADDING_DSPWORDS(35);
+    float mix[12];
+    float rate;
+    u8 rim[2];
+    u16 iirFilterType;
+    u16 iirFilter_mono[2];
+    u16 iirFilter_biquad[5];
 
     // Buffer Queue
     u16 buffers_dirty;                //< Which of those queued buffers is dirty (bit i == buffers[i])
@@ -126,14 +131,18 @@ struct ChannelContext {
     dsp_u32 physical_address;
     dsp_u32 sample_count;
     union {
+        u16 flags1_raw;
         BitField<0, 2, u16> mono_or_stereo;
         BitField<2, 2, Audio::Format> format;
+        BitField<4, 12, u16> rest;
     };
     u16 adpcm_ps;
     s16 adpcm_yn[2];
     union {
+        u16 flags2_raw;
         BitField<0, 1, u16> has_adpcm;
         BitField<1, 1, u16> is_looping;
+        BitField<2, 14, u16> rest2;
     };
     u16 buffer_id;
 };
@@ -150,7 +159,7 @@ struct ChannelStatus {
 ASSERT_STRUCT(ChannelStatus, 12);
 
 struct AdpcmCoefficients {
-    u16 coeff[16];
+    s16 coeff[16];
 };
 ASSERT_STRUCT(AdpcmCoefficients, 32);
 
@@ -184,6 +193,8 @@ static void AudioTick(u64, int cycles_late) {
     }
 
     auto channel_contexes = (ChannelContext*) Memory::GetPointer(DspAddrToVAddr(current_base, DSPADDR1));
+    auto channel_contex0 = (ChannelContext*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_0, DSPADDR1));
+    auto channel_contex1 = (ChannelContext*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_1, DSPADDR1));
     auto channel_status0 = (ChannelStatus*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_0, DSPADDR2));
     auto channel_status1 = (ChannelStatus*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_1, DSPADDR2));
     auto channel_adpcm_coeffs = (AdpcmCoefficients*) Memory::GetPointer(DspAddrToVAddr(current_base, DSPADDR3));
@@ -199,15 +210,9 @@ static void AudioTick(u64, int cycles_late) {
                 LOG_WARNING(Service_DSP, "Unimplemented dirty bit 29");
             }
 
-            if (TestAndUnsetBit(ctx.dirty, 16)) {
-                // Is Active?
-                //LOG_WARNING(Service_DSP, "Unimplemented dirty bit 16");
-            }
-
             if (TestAndUnsetBit(ctx.dirty, 2)) {
                 // Update ADPCM coefficients
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 2");
-                AdpcmCoefficients& coeff = channel_adpcm_coeffs[chanid];
+                Audio::UpdateAdpcm(chanid, channel_adpcm_coeffs[chanid].coeff);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 17)) {
@@ -218,16 +223,18 @@ static void AudioTick(u64, int cycles_late) {
             if (TestAndUnsetBit(ctx.dirty, 18)) {
                 // Rate
                 LOG_WARNING(Service_DSP, "Unimplemented dirty bit 18");
+                LOG_INFO(Service_DSP, "Rate %f", ctx.rate);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 22)) {
                 // IIR
                 LOG_WARNING(Service_DSP, "Unimplemented dirty bit 22");
+                LOG_INFO(Service_DSP, "IIR %x", ctx.iirFilterType);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 28)) {
                 // Sync count
-                LOG_WARNING(Service_DSP, "(STUB) Update Sync Count");
+                LOG_DEBUG(Service_DSP, "Update Sync Count");
 
                 status0.sync = ctx.sync;
                 status1.sync = ctx.sync;
@@ -236,12 +243,20 @@ static void AudioTick(u64, int cycles_late) {
             if (TestAndUnsetBit(ctx.dirty, 25) | TestAndUnsetBit(ctx.dirty, 26) | TestAndUnsetBit(ctx.dirty, 27)) {
                 // Mix
                 LOG_WARNING(Service_DSP, "Unimplemented dirty bit 25/26/27");
+                for (int i = 0; i < 12; i++)
+                    LOG_INFO(Service_DSP, "mix[%i] %f", i, ctx.mix[i]);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 4) | TestAndUnsetBit(ctx.dirty, 21) | TestAndUnsetBit(ctx.dirty, 30)) {
                 // TODO(merry): One of these bits might merely signify an update to the format. Verify this.
                 // Embedded Buffer Changed
-                Audio::UpdateFormat(chanid, ctx.mono_or_stereo, ctx.format);
+                Audio::UpdateFormat(chanid, ctx.mono_or_stereo, ctx.format, ctx.rest);
+                channel_contex0[chanid].flags1_raw = channel_contex1[chanid].flags1_raw = ctx.flags1_raw;
+                channel_contex0[chanid].flags2_raw = channel_contex1[chanid].flags2_raw = ctx.flags2_raw;
+                if (ctx.rest || ctx.rest2) {
+                    LOG_ERROR(Service_DSP, "chan %i rest %04x rest2 %04x", chanid, ctx.rest, ctx.rest2);
+                }
+                Audio::UpdateAdpcm(chanid, channel_adpcm_coeffs[chanid].coeff);
                 Audio::EnqueueBuffer(chanid, ctx.buffer_id,
                         Memory::GetPhysicalPointer(ctx.physical_address), ctx.sample_count,
                         ctx.has_adpcm, ctx.adpcm_ps, ctx.adpcm_yn,
@@ -271,8 +286,17 @@ static void AudioTick(u64, int cycles_late) {
                 status0.is_playing |= 0x100; // TODO: This is supposed to flicker on then turn off.
             }
 
+            if (TestAndUnsetBit(ctx.dirty, 16)) {
+                // Is Active?
+                Audio::Play(chanid, (ctx.is_active & 0xFF) != 0);
+            }
+
             if (ctx.dirty) {
                 LOG_ERROR(Service_DSP, "Unknown channel dirty bits: 0x%08x", ctx.dirty);
+                LOG_ERROR(Service_DSP, "%i Rim %i %i", chanid, ctx.rim[0], ctx.rim[1]);
+                LOG_ERROR(Service_DSP, "%i IIR-type %i", chanid, ctx.iirFilterType);
+                LOG_ERROR(Service_DSP, "%i Mono %f %f", chanid, ctx.iirFilter_mono[0], ctx.iirFilter_mono[1]);
+                LOG_ERROR(Service_DSP, "%i Biquad %f %f %f %f %f", chanid, ctx.iirFilter_biquad[0], ctx.iirFilter_biquad[1], ctx.iirFilter_biquad[2], ctx.iirFilter_biquad[3], ctx.iirFilter_biquad[4]);
             }
 
             ctx.dirty = 0;
