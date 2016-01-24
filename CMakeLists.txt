@@ -159,6 +159,12 @@ if (ENABLE_GLFW)
     endif()
 endif()
 
+set(OPENAL_PREFIX "${CMAKE_BINARY_DIR}/externals/openal-soft-1.17.1-bin")
+set(OPENAL_INCLUDE_DIRS "${OPENAL_PREFIX}/include" CACHE PATH "Path to OpenAL-Soft headers")
+set(OPENAL_LIBRARY_DIRS "${OPENAL_PREFIX}/libs/Win64" CACHE PATH "Path to OpenAL-Soft libraries")
+set(OPENAL_LIBRARIES OpenAL32)
+include_directories(${OPENAL_INCLUDE_DIRS})
+
 IF (APPLE)
     FIND_LIBRARY(COCOA_LIBRARY Cocoa)           # Umbrella framework for everything GUI-related
     FIND_LIBRARY(IOKIT_LIBRARY IOKit)           # GLFW dependency

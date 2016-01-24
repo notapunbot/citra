@@ -2,30 +2,299 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/bit_field.h"
 #include "common/logging/log.h"
 
+#include "core/audio/stream.h"
+#include "core/core_timing.h"
 #include "core/hle/hle.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/service/dsp_dsp.h"
+
+#include <unordered_map>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Namespace DSP_DSP
 
 namespace DSP_DSP {
 
+struct PairHash {
+public:
+    template <typename T, typename U>
+    std::size_t operator()(const std::pair<T, U> &x) const {
+        return std::hash<T>()(x.first) ^ std::hash<U>()(x.second);
+    }
+};
+
 static u32 read_pipe_count;
+
 static Kernel::SharedPtr<Kernel::Event> semaphore_event;
-static Kernel::SharedPtr<Kernel::Event> interrupt_event;
+static u32 semaphore_mask;
 
-void SignalInterrupt() {
-    // TODO(bunnei): This is just a stub, it does not do anything other than signal to the emulated
-    // application that a DSP interrupt occurred, without specifying which one. Since we do not
-    // emulate the DSP yet (and how it works is largely unknown), this is a work around to get games
-    // that check the DSP interrupt signal event to run. We should figure out the different types of
-    // DSP interrupts, and trigger them at the appropriate times.
+static std::unordered_map<std::pair<u32, u32>, Kernel::SharedPtr<Kernel::Event>, PairHash> interrupt_events;
 
-    if (interrupt_event != 0)
-        interrupt_event->Signal();
+static const u64 frame_tick = 1310252ull;
+static int tick_event;
+
+// Addresses of various things
+static const VAddr BASE_ADDR_0 = Memory::DSP_RAM_VADDR + 0x40000;
+static const VAddr BASE_ADDR_1 = Memory::DSP_RAM_VADDR + 0x60000;
+static constexpr VAddr DspAddrToVAddr(VAddr base, u32 dsp_addr) {
+    return (VAddr(dsp_addr) << 1) + base;
+}
+static const u32 DSPADDR0 = 0xBFFF; // Frame Counter
+static const u32 DSPADDR1 = 0x9E92; // Channel Context (x24)
+static const u32 DSPADDR2 = 0x8680; // Channel Status (x24)
+static const u32 DSPADDR3 = 0xA792; // ADPCM Coefficients (x24)
+static const u32 DSPADDR4 = 0x9430; // Context
+static const u32 DSPADDR5 = 0x8400; // Status
+static const u32 DSPADDR6 = 0x8540; // Loopback Samples
+static const u32 DSPADDR7 = 0x9494;
+static const u32 DSPADDR8 = 0x8710;
+static const u32 DSPADDR9 = 0x8410; // ???
+static const u32 DSPADDR10 = 0xA912;
+static const u32 DSPADDR11 = 0xAA12;
+static const u32 DSPADDR12 = 0xAAD2;
+static const u32 DSPADDR13 = 0xAC52;
+static const u32 DSPADDR14 = 0xAC5C;
+static const u32 DSPADDR_frame_counter = DSPADDR0;
+
+static const int NUM_CHANNELS = 24;
+
+/**
+ * DSP_DSP::DspEndian
+ *     Care must be taken when reading/writing 32-bit values. The DSP has a 16-bit wordsize and is big-endian.
+ *     The bytes in each word when viewed from the ARM11, however, are in little-endian.
+ *     Thus we have what appears to be a middle-endian encoding.
+ *
+ *     The below function is its own inverse.
+ */
+struct dsp_u32 {
+    static constexpr u32 Convert(u32 value) {
+        return ((value & 0x0000FFFF) << 16) | ((value & 0xFFFF0000) >> 16);
+    }
+    operator u32() {
+        return Convert(value);
+    }
+    void operator=(u32 newvalue) {
+        value = Convert(newvalue);
+    }
+private:
+    u32 value;
+};
+
+#define INSERT_PADDING_DSPWORDS(num_words) u16 CONCAT2(pad, __LINE__)[(num_words)]
+#define ASSERT_STRUCT(name, size) \
+    static_assert(std::is_standard_layout<name>::value, "Structure doesn't use standard layout"); \
+    static_assert(sizeof(name) == (size), "Unexpected struct size")
+
+/*
+ * ADPCM seems to be the usual Nintendo format.
+ * ps = predictor / scaler
+ * yn[0,1] = sample history
+ * Coefficients are found at DSPADDR3
+ */
+
+struct Buffer {
+    dsp_u32 physical_address;
+    dsp_u32 sample_count;
+    u16 adpcm_ps;
+    s16 adpcm_yn[2];
+    u8 has_adpcm;
+    u8 is_looping;
+    u16 buffer_id;
+    INSERT_PADDING_DSPWORDS(1);
+};
+
+// Userland mainly controls the values in this structure
+struct ChannelContext {
+    u32 dirty;
+
+    // Effects
+    INSERT_PADDING_DSPWORDS(35);
+
+    // Buffer Queue
+    u16 buffers_dirty;                //< Which of those queued buffers is dirty (bit i == buffers[i])
+    Buffer buffers[4];                //< Queued Buffers
+
+    INSERT_PADDING_DSPWORDS(2);
+    u16 is_active;                    //< Lower 8 bits == 0x01 if true.
+    u16 sync;
+    INSERT_PADDING_DSPWORDS(4);
+
+    // Current Buffer
+    dsp_u32 physical_address;
+    dsp_u32 sample_count;
+    union {
+        BitField<0, 2, u16> mono_or_stereo;
+        BitField<2, 2, Audio::Format> format;
+    };
+    u16 adpcm_ps;
+    s16 adpcm_yn[2];
+    union {
+        BitField<0, 1, u16> has_adpcm;
+        BitField<1, 1, u16> is_looping;
+    };
+    u16 buffer_id;
+};
+ASSERT_STRUCT(ChannelContext, 192);
+
+// The DSP controls the values in this structure
+struct ChannelStatus {
+    u16 is_playing;
+    u16 sync;
+    dsp_u32 buffer_position;
+    u16 current_buffer_id;
+    u16 previous_buffer_id;
+};
+ASSERT_STRUCT(ChannelStatus, 12);
+
+struct AdpcmCoefficients {
+    u16 coeff[16];
+};
+ASSERT_STRUCT(AdpcmCoefficients, 32);
+
+template <typename T>
+static inline bool TestAndUnsetBit(T& value, size_t bitno) {
+    T mask = 1 << bitno;
+    bool ret = (value & mask) == mask;
+    value &= ~mask;
+    return ret;
+}
+
+static void AudioTick(u64, int cycles_late) {
+    VAddr current_base;
+
+    {
+        int id0 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_0, DSPADDR_frame_counter));
+        int id1 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_1, DSPADDR_frame_counter));
+
+        // The frame id increments once per audio frame, with wraparound at 65,535.
+        // I am uncertain whether the real DSP actually does something like this,
+        // or merely checks for a certan id for wraparound. TODO: Verify.
+        if (id1 - id0 > 10000 && id0 < 10) {
+            current_base = BASE_ADDR_0;
+        } else if (id0 - id1 > 10000 && id1 < 10) {
+            current_base = BASE_ADDR_1;
+        } else if (id1 > id0) {
+            current_base = BASE_ADDR_1;
+        } else {
+            current_base = BASE_ADDR_0;
+        }
+    }
+
+    auto channel_contexes = (ChannelContext*) Memory::GetPointer(DspAddrToVAddr(current_base, DSPADDR1));
+    auto channel_status0 = (ChannelStatus*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_0, DSPADDR2));
+    auto channel_status1 = (ChannelStatus*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_1, DSPADDR2));
+    auto channel_adpcm_coeffs = (AdpcmCoefficients*) Memory::GetPointer(DspAddrToVAddr(current_base, DSPADDR3));
+
+    for (int chanid=0; chanid<NUM_CHANNELS; chanid++) {
+        ChannelContext& ctx = channel_contexes[chanid];
+        ChannelStatus& status0 = channel_status0[chanid];
+        ChannelStatus& status1 = channel_status1[chanid];
+
+        if (ctx.dirty) {
+            if (TestAndUnsetBit(ctx.dirty, 29)) {
+                // First time init
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 29");
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 16)) {
+                // Is Active?
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 16");
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 2)) {
+                // Update ADPCM coefficients
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 2");
+                AdpcmCoefficients& coeff = channel_adpcm_coeffs[chanid];
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 17)) {
+                // Interpolation type
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 17");
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 18)) {
+                // Rate
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 18");
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 22)) {
+                // IIR
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 22");
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 28)) {
+                // Sync count
+                LOG_WARNING(Service_DSP, "(STUB) Update Sync Count");
+
+                status0.sync = ctx.sync;
+                status1.sync = ctx.sync;
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 25) | TestAndUnsetBit(ctx.dirty, 26) | TestAndUnsetBit(ctx.dirty, 27)) {
+                // Mix
+                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 25/26/27");
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 4) | TestAndUnsetBit(ctx.dirty, 21) | TestAndUnsetBit(ctx.dirty, 30)) {
+                // TODO(merry): One of these bits might merely signify an update to the format. Verify this.
+                // Embedded Buffer Changed
+                Audio::UpdateFormat(chanid, ctx.mono_or_stereo, ctx.format);
+                Audio::EnqueueBuffer(chanid, ctx.buffer_id,
+                        Memory::GetPhysicalPointer(ctx.physical_address), ctx.sample_count,
+                        ctx.has_adpcm, ctx.adpcm_ps, ctx.adpcm_yn,
+                        ctx.is_looping);
+
+                status0.is_playing |= 0x100; // TODO: This is supposed to flicker on then turn off.
+            }
+
+            if (TestAndUnsetBit(ctx.dirty, 19)) {
+                // Buffer queue
+                for (int i = 0; i < 4; i++) {
+                    if (TestAndUnsetBit(ctx.buffers_dirty, i)) {
+                        auto& b = ctx.buffers[i];
+                        Audio::EnqueueBuffer(chanid, b.buffer_id,
+                                Memory::GetPhysicalPointer(b.physical_address), b.sample_count,
+                                b.has_adpcm, b.adpcm_ps, b.adpcm_yn,
+                                b.is_looping);
+                    }
+                }
+
+                if (ctx.buffers_dirty) {
+                    LOG_ERROR(Service_DSP, "Unknown channel buffer dirty bits: 0x%04x", ctx.buffers_dirty);
+                }
+
+                ctx.buffers_dirty = 0;
+
+                status0.is_playing |= 0x100; // TODO: This is supposed to flicker on then turn off.
+            }
+
+            if (ctx.dirty) {
+                LOG_ERROR(Service_DSP, "Unknown channel dirty bits: 0x%08x", ctx.dirty);
+            }
+
+            ctx.dirty = 0;
+        }
+
+        Audio::Tick(chanid);
+
+        // Update channel status
+        bool playing = false;
+        std::tie(playing, status0.current_buffer_id, status0.buffer_position) = Audio::GetStatus(chanid);
+        if (playing) {
+            status0.is_playing |= 1;
+        } else {
+            status0.is_playing = 0;
+        }
+        status1 = status0;
+    }
+
+    for (auto interrupt_event : interrupt_events)
+        interrupt_event.second->Signal();
+
+    CoreTiming::ScheduleEvent(frame_tick-cycles_late, tick_event, 0);
 }
 
 /**
@@ -42,9 +311,7 @@ static void ConvertProcessAddressFromDspDram(Service::Interface* self) {
     u32 addr = cmd_buff[1];
 
     cmd_buff[1] = 0; // No error
-    cmd_buff[2] = (addr << 1) + (Memory::DSP_RAM_VADDR + 0x40000);
-
-    LOG_WARNING(Service_DSP, "(STUBBED) called with address 0x%08X", addr);
+    cmd_buff[2] = DspAddrToVAddr(BASE_ADDR_0, addr);
 }
 
 /**
@@ -122,8 +389,8 @@ static void FlushDataCache(Service::Interface* self) {
 /**
  * DSP_DSP::RegisterInterruptEvents service function
  *  Inputs:
- *      1 : Parameter 0 (purpose unknown)
- *      2 : Parameter 1 (purpose unknown)
+ *      1 : Interrupt
+ *      2 : Number
  *      4 : Interrupt event handle
  *  Outputs:
  *      1 : Result of function, 0 on success, otherwise error code
@@ -131,22 +398,28 @@ static void FlushDataCache(Service::Interface* self) {
 static void RegisterInterruptEvents(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
 
-    u32 param0 = cmd_buff[1];
-    u32 param1 = cmd_buff[2];
+    u32 interrupt = cmd_buff[1]; // TODO(merry): Confirm the purpose of each interrupt. Presumably there would be one interrupt that would allow for ARM11 modification of the output.
+    u32 number = cmd_buff[2];
     u32 event_handle = cmd_buff[4];
 
-    auto evt = Kernel::g_handle_table.Get<Kernel::Event>(cmd_buff[4]);
-    if (evt != nullptr) {
-        interrupt_event = evt;
-        cmd_buff[1] = 0; // No error
+    if (!event_handle) {
+        // Unregister the event for this interrupt and number
+        interrupt_events.erase(std::make_pair(interrupt, number));
+        cmd_buff[1] = RESULT_SUCCESS.raw;
     } else {
-        LOG_ERROR(Service_DSP, "called with invalid handle=%08X", cmd_buff[4]);
+        auto evt = Kernel::g_handle_table.Get<Kernel::Event>(event_handle);
+        if (evt != nullptr) {
+            interrupt_events[std::make_pair(interrupt, number)] = evt;
+            cmd_buff[1] = RESULT_SUCCESS.raw; // No error
+        } else {
+            LOG_ERROR(Service_DSP, "called with invalid handle=%08X", event_handle);
 
-        // TODO(yuriks): An error should be returned from SendSyncRequest, not in the cmdbuf
-        cmd_buff[1] = -1;
+            // TODO(yuriks): An error should be returned from SendSyncRequest, not in the cmdbuf
+            cmd_buff[1] = -1;
+        }
     }
 
-    LOG_WARNING(Service_DSP, "(STUBBED) called param0=%u, param1=%u, event_handle=0x%08X", param0, param1, event_handle);
+    LOG_WARNING(Service_DSP, "(STUBBED) called interrupt=%u, number=%u, event_handle=0x%08X", interrupt, number, event_handle);
 }
 
 /**
@@ -155,11 +428,11 @@ static void RegisterInterruptEvents(Service::Interface* self) {
  *      1 : Unknown (observed only half word used)
  *  Outputs:
  *      1 : Result of function, 0 on success, otherwise error code
+ *  Notes:
+ *      Games do not seem to rely on the DSP semaphore very much
  */
 static void SetSemaphore(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
-
-    SignalInterrupt();
 
     cmd_buff[1] = 0; // No error
 
@@ -205,16 +478,35 @@ static void WriteProcessPipe(Service::Interface* self) {
 static void ReadPipeIfPossible(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
 
-    u32 unk1 = cmd_buff[1];
+    u32 pipe = cmd_buff[1];
     u32 unk2 = cmd_buff[2];
     u32 size = cmd_buff[3] & 0xFFFF;// Lower 16 bits are size
     VAddr addr = cmd_buff[0x41];
 
+    if (pipe != 2) {
+        LOG_ERROR(Service_DSP, "I'm not sure what to do when pipe=0x%08x\n", pipe);
+    }
+
     // Canned DSP responses that games expect. These were taken from HW by 3dmoo team.
     // TODO: Remove this hack :)
+    // FIXME(merry): Incorrect behaviour; the read buffer isn't a single stream, nor does it behave like a stream.
     static const std::array<u16, 16> canned_read_pipe = {{
-        0x000F, 0xBFFF, 0x9E8E, 0x8680, 0xA78E, 0x9430, 0x8400, 0x8540,
-        0x948E, 0x8710, 0x8410, 0xA90E, 0xAA0E, 0xAACE, 0xAC4E, 0xAC58
+        0x000F,
+        DSPADDR0,
+        DSPADDR1,
+        DSPADDR2,
+        DSPADDR3,
+        DSPADDR4,
+        DSPADDR5,
+        DSPADDR6,
+        DSPADDR7,
+        DSPADDR8,
+        DSPADDR9,
+        DSPADDR10,
+        DSPADDR11,
+        DSPADDR12,
+        DSPADDR13,
+        DSPADDR14,
     }};
 
     u32 initial_size = read_pipe_count;
@@ -232,8 +524,8 @@ static void ReadPipeIfPossible(Service::Interface* self) {
     cmd_buff[1] = 0; // No error
     cmd_buff[2] = (read_pipe_count - initial_size) * sizeof(u16);
 
-    LOG_WARNING(Service_DSP, "(STUBBED) called unk1=0x%08X, unk2=0x%08X, size=0x%X, buffer=0x%08X",
-                unk1, unk2, size, addr);
+    LOG_WARNING(Service_DSP, "(STUBBED) called pipe=0x%08X, unk2=0x%08X, size=0x%X, buffer=0x%08X",
+                pipe, unk2, size, addr);
 }
 
 /**
@@ -247,6 +539,8 @@ static void SetSemaphoreMask(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
 
     u32 mask = cmd_buff[1];
+
+    semaphore_mask = mask;
 
     cmd_buff[1] = RESULT_SUCCESS.raw; // No error
 
@@ -269,6 +563,46 @@ static void GetHeadphoneStatus(Service::Interface* self) {
     cmd_buff[2] = 0; // Not using headphones?
 
     LOG_DEBUG(Service_DSP, "(STUBBED) called");
+}
+
+/**
+* DSP_DSP::RecvData service function
+*  Inputs:
+*      1 : Register Number
+*  Outputs:
+*      1 : Result of function, 0 on success, otherwise error code
+*      2 : Value in the register
+*/
+static void RecvData(Service::Interface* self) {
+    u32* cmd_buff = Kernel::GetCommandBuffer();
+
+    u32 registerNo = cmd_buff[1];
+
+    cmd_buff[1] = RESULT_SUCCESS.raw; // No error
+    cmd_buff[2] = 1;
+
+    LOG_WARNING(Service_DSP, "(STUBBED) called register=%u", registerNo);
+}
+
+/**
+* DSP_DSP::RecvDataIsReady service function
+*  Inputs:
+*      1 : Register Number
+*  Outputs:
+*      1 : Result of function, 0 on success, otherwise error code
+*      2 : non-zero == ready
+*  Notes:
+*      Seems to be mainly called when going into sleep mode.
+*/
+static void RecvDataIsReady(Service::Interface* self) {
+    u32* cmd_buff = Kernel::GetCommandBuffer();
+
+    u32 registerNo = cmd_buff[1];
+
+    cmd_buff[1] = RESULT_SUCCESS.raw; // No error
+    cmd_buff[2] = 1;
+
+    LOG_WARNING(Service_DSP, "(STUBBED) called register=%u", registerNo);
 }
 
 const Interface::FunctionInfo FunctionTable[] = {
@@ -312,15 +646,20 @@ const Interface::FunctionInfo FunctionTable[] = {
 
 Interface::Interface() {
     semaphore_event = Kernel::Event::Create(RESETTYPE_ONESHOT, "DSP_DSP::semaphore_event");
-    interrupt_event = nullptr;
+    interrupt_events.clear();
     read_pipe_count = 0;
 
     Register(FunctionTable);
+
+    tick_event = CoreTiming::RegisterEvent("DSP_DSP::tick_event", AudioTick);
+    CoreTiming::ScheduleEvent(frame_tick, tick_event, 0);
 }
 
 Interface::~Interface() {
     semaphore_event = nullptr;
-    interrupt_event = nullptr;
+    interrupt_events.clear();
+
+    CoreTiming::UnscheduleEvent(tick_event, 0);
 }
 
 } // namespace
