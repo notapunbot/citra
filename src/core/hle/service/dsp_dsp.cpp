@@ -201,7 +201,7 @@ static void AudioTick(u64, int cycles_late) {
 
             if (TestAndUnsetBit(ctx.dirty, 16)) {
                 // Is Active?
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 16");
+                //LOG_WARNING(Service_DSP, "Unimplemented dirty bit 16");
             }
 
             if (TestAndUnsetBit(ctx.dirty, 2)) {

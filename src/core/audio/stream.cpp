@@ -11,6 +11,8 @@
 #include <queue>
 
 namespace Audio {
+    std::vector<u16> DecodeADPCM(u8* data, size_t sample_count, u16 adpcm_ps, s16 adpcm_yn[2], std::array<u8, 16> adpcm_coeff);
+
     static const int BASE_SAMPLE_RATE = 22050;
 
     struct Buffer {
@@ -63,8 +65,9 @@ namespace Audio {
         return 0;
     }
 
-    ALuint source, buffer;
+    ALuint silencebuffer;
     ALCint dev_rate;
+    std::array<u8, 10000> silence;
 
     void Init() {
         InitAL();
@@ -92,21 +95,51 @@ namespace Audio {
     }
 
     void EnqueueBuffer(int chanid, u16 buffer_id,
-        void* data, int sample_count,
-        bool has_adpcm, u16 adpcm_ps, s16 adpcm_yn[2],
-        bool is_looping) {
+            void* data, int sample_count,
+            bool has_adpcm, u16 adpcm_ps, s16 adpcm_yn[2],
+            bool is_looping) {
 
-        if (chans[chanid].format != FORMAT_PCM16) {
-            LOG_ERROR(Audio, "Unimplemented format");
-            return;
+        if (is_looping) {
+            LOG_WARNING(Audio, "Looped buffers are unimplemented");
         }
-
-        // TODO: ADPCM processing should happen here
 
         ALuint b;
         alGenBuffers(1, &b);
-        alBufferData(b, AL_FORMAT_MONO16, data, sample_count*2, BASE_SAMPLE_RATE);
-        if (alGetError() != AL_NO_ERROR) LOG_CRITICAL(Audio, "Failed to init buffer");
+
+        if (chans[chanid].format == FORMAT_PCM16) {
+            switch (chans[chanid].mono_or_stereo) {
+            case 2:
+                alBufferData(b, AL_FORMAT_STEREO16, data, sample_count * 4, BASE_SAMPLE_RATE);
+                break;
+            case 1:
+            default:
+                alBufferData(b, AL_FORMAT_MONO16, data, sample_count * 2, BASE_SAMPLE_RATE);
+                break;
+            }
+            if (alGetError() != AL_NO_ERROR) LOG_CRITICAL(Audio, "Failed to init buffer");
+        } else if (chans[chanid].format == FORMAT_PCM8) {
+            switch (chans[chanid].mono_or_stereo) {
+            case 2:
+                alBufferData(b, AL_FORMAT_STEREO8, data, sample_count * 2, BASE_SAMPLE_RATE);
+                break;
+            case 1:
+            default:
+                alBufferData(b, AL_FORMAT_MONO8, data, sample_count * 1, BASE_SAMPLE_RATE);
+                break;
+            }
+            if (alGetError() != AL_NO_ERROR) LOG_CRITICAL(Audio, "Failed to init buffer");
+        } /*else if (chans[chanid].format == FORMAT_ADPCM) {
+            if (chans[chanid].mono_or_stereo != 1) {
+                LOG_ERROR(Audio, "Being fed non-mono ADPCM");
+            }
+            std::vector<u16> decoded = DecodeADPCM(data, sample_count, adpcm_ps, adpcm_yn, chans[chanid].adpcm_coeff);
+            alBufferData(b, AL_FORMAT_MONO16, decoded.data(), decoded.size() * 2, BASE_SAMPLE_RATE);
+            if (alGetError() != AL_NO_ERROR) LOG_CRITICAL(Audio, "Failed to init buffer");
+        }*/ else {
+            LOG_ERROR(Audio, "Unrecognised audio format in buffer 0x%04x (size: %i samples)", buffer_id, sample_count);
+            alBufferData(b, AL_FORMAT_MONO8, silence.data(), silence.size(), BASE_SAMPLE_RATE);
+            if (alGetError() != AL_NO_ERROR) LOG_CRITICAL(Audio, "Failed to init buffer");
+        }
 
         chans[chanid].queue.emplace( Buffer { buffer_id, b, is_looping });
     }
@@ -119,7 +152,7 @@ namespace Audio {
                 alSourceQueueBuffers(c.source, 1, &c.queue.top().buffer);
                 if (alGetError() != AL_NO_ERROR) LOG_CRITICAL(Audio, "Failed to enqueue buffer");
                 c.playing.emplace(c.queue.top());
-                LOG_INFO(Audio, "Enqueued buffer id %i", c.queue.top().id);
+                LOG_INFO(Audio, "Enqueued buffer id 0x%04x", c.queue.top().id);
                 c.queue.pop();
             }
 
@@ -141,7 +174,7 @@ namespace Audio {
             alSourceUnqueueBuffers(c.source, 1, &buf);
             processed--;
 
-            LOG_INFO(Audio, "Finished buffer id %i", c.playing.front().id);
+            LOG_INFO(Audio, "Finished buffer id 0x%04x", c.playing.front().id);
 
             while (!c.playing.empty() && c.playing.front().buffer != buf) {
                 c.playing.pop();
