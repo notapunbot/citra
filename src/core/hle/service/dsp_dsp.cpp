@@ -67,20 +67,22 @@ static constexpr VAddr DspAddrToVAddr(VAddr base, DspRegion dsp_addr) {
 
 /**
  * dsp_u32:
- *     Care must be taken when reading/writing 32-bit values as the words are not in the expected order.
+ *     Care must be taken when reading/writing 32-bit values in the DSP shared memory region
+ *     as the byte order for 32-bit values is middle endian.
+ *     This is presumably because the DSP is big endian with a 16 bit wordsize.
  */
 struct dsp_u32 {
-    operator u32() {
+    operator u32() const {
         return Convert(storage);
     }
-    void operator=(u32 newvalue) {
-        storage = Convert(newvalue);
+    void operator=(u32 new_value) {
+        storage = Convert(new_value);
     }
 private:
     static constexpr u32 Convert(u32 value) {
         return ((value & 0x0000FFFF) << 16) | ((value & 0xFFFF0000) >> 16);
     }
-    u32 storage;
+    u32 storage = 0;
 };
 
 #define INSERT_PADDING_DSPWORDS(num_words) u16 CONCAT2(pad, __LINE__)[(num_words)]
@@ -161,144 +163,179 @@ struct AdpcmCoefficients {
 };
 ASSERT_STRUCT(AdpcmCoefficients, 32);
 
-template <typename T>
-static inline bool TestAndUnsetBit(T& value, size_t bitno) {
-    T mask = 1 << bitno;
-    bool ret = (value & mask) == mask;
-    value &= ~mask;
+// Temporary, switch ChannelContext::dirty to using BitFlags later.
+template <size_t bit_number, typename T>
+static bool TestAndUnsetBit(T& value) {
+    auto& field = *reinterpret_cast<BitField<bit_number, 1, T>*>(&value);
+    bool ret = field;
+    field = 0;
     return ret;
 }
 
-static void AudioTick(u64, int cycles_late) {
-    VAddr current_base;
+static VAddr GetCurrentBase() {
+    // Frame IDs.
+    int id0 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_0, DSPADDR0));
+    int id1 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_1, DSPADDR0));
 
-    {
-        // Frame IDs.
-        int id0 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_0, DSPADDR0));
-        int id1 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_1, DSPADDR0));
+    // The frame id increments once per audio frame, with wraparound at 65,535.
+    // I am uncertain whether the real DSP actually does something like this,
+    // or merely checks for a certan id for wraparound. TODO: Verify.
+    if (id1 - id0 > 10000 && id0 < 10) {
+        return BASE_ADDR_0;
+    } else if (id0 - id1 > 10000 && id1 < 10) {
+        return BASE_ADDR_1;
+    } else if (id1 > id0) {
+        return BASE_ADDR_1;
+    } else {
+        return BASE_ADDR_0;
+    }
+}
 
-        // The frame id increments once per audio frame, with wraparound at 65,535.
-        // I am uncertain whether the real DSP actually does something like this,
-        // or merely checks for a certan id for wraparound. TODO: Verify.
-        if (id1 - id0 > 10000 && id0 < 10) {
-            current_base = BASE_ADDR_0;
-        } else if (id0 - id1 > 10000 && id1 < 10) {
-            current_base = BASE_ADDR_1;
-        } else if (id1 > id0) {
-            current_base = BASE_ADDR_1;
-        } else {
-            current_base = BASE_ADDR_0;
-        }
+// Last recorded sync count from ChannelContext.
+static std::array<u16, NUM_CHANNELS> syncs;
+
+static ChannelContext GetChannelContext(VAddr base, int channel_id) {
+    ChannelContext ctx;
+
+    if (!Memory::ExtractFromMemory(DspAddrToVAddr(base, DSPADDR1) + channel_id * sizeof(ChannelContext), ctx)) {
+        LOG_CRITICAL(Service_DSP, "ExtractFromMemory for DSPADDR1 failed");
     }
 
-    auto channel_contexes = (ChannelContext*) Memory::GetPointer(DspAddrToVAddr(current_base, DSPADDR1));
-    auto channel_contex0 = (ChannelContext*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_0, DSPADDR1));
-    auto channel_contex1 = (ChannelContext*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_1, DSPADDR1));
-    auto channel_status0 = (ChannelStatus*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_0, DSPADDR2));
-    auto channel_status1 = (ChannelStatus*)Memory::GetPointer(DspAddrToVAddr(BASE_ADDR_1, DSPADDR2));
-    auto channel_adpcm_coeffs = (AdpcmCoefficients*) Memory::GetPointer(DspAddrToVAddr(current_base, DSPADDR3));
+    return ctx;
+}
 
-    for (int chanid=0; chanid<NUM_CHANNELS; chanid++) {
-        ChannelContext& ctx = channel_contexes[chanid];
-        ChannelStatus& status0 = channel_status0[chanid];
-        ChannelStatus& status1 = channel_status1[chanid];
+static void SetChannelContext(VAddr base, int channel_id, const ChannelContext& ctx) {
+    if (!Memory::InjectIntoMemory(DspAddrToVAddr(base, DSPADDR1) + channel_id * sizeof(ChannelContext), ctx)) {
+        LOG_CRITICAL(Service_DSP, "InjectIntoMemory for DSPADDR1 failed");
+    }
+}
 
-        if (ctx.dirty) {
-            if (TestAndUnsetBit(ctx.dirty, 29)) {
-                // First time init
-                LOG_DEBUG(Service_DSP, "Channel %i: First Time Init", chanid);
+static void ReadChannelContext(VAddr current_base, int channel_id) {
+    ChannelContext ctx = GetChannelContext(current_base, channel_id);
+
+    if (!ctx.dirty) {
+        return;
+    }
+
+    if (TestAndUnsetBit<29>(ctx.dirty)) {
+        // First time init
+        LOG_DEBUG(Service_DSP, "Channel %i: First Time Init", channel_id);
+    }
+
+    if (TestAndUnsetBit<2>(ctx.dirty)) {
+        // Update ADPCM coefficients
+        AdpcmCoefficients coeff;
+        if (!Memory::ExtractFromMemory(DspAddrToVAddr(current_base, DSPADDR3) + channel_id * sizeof(coeff), coeff)) {
+            LOG_CRITICAL(Service_DSP, "ExtractFromMemory for DSPADDR3 failed");
+            return;
+        }
+        Audio::UpdateAdpcm(channel_id, coeff.coeff);
+    }
+
+    if (TestAndUnsetBit<17>(ctx.dirty)) {
+        // Interpolation type
+        LOG_WARNING(Service_DSP, "Channel %i: Unimplemented dirty bit 17", channel_id);
+    }
+
+    if (TestAndUnsetBit<18>(ctx.dirty)) {
+        // Rate
+        LOG_WARNING(Service_DSP, "Channel %i: Unimplemented Rate %f", channel_id, ctx.rate);
+    }
+
+    if (TestAndUnsetBit<22>(ctx.dirty)) {
+        // IIR
+        LOG_WARNING(Service_DSP, "Channel %i: Unimplemented IIR %x", channel_id, ctx.iirfilter_type);
+    }
+
+    if (TestAndUnsetBit<28>(ctx.dirty)) {
+        // Sync count
+        LOG_DEBUG(Service_DSP, "Channel %i: Update Sync Count");
+        syncs[channel_id] = ctx.sync;
+    }
+
+    if (TestAndUnsetBit<25>(ctx.dirty) | TestAndUnsetBit<26>(ctx.dirty) | TestAndUnsetBit<27>(ctx.dirty)) {
+        // Mix
+        for (int i = 0; i < 12; i++)
+            LOG_DEBUG(Service_DSP, "Channel %i: mix[%i] %f", channel_id, i, ctx.mix[i]);
+    }
+
+    if (TestAndUnsetBit<4>(ctx.dirty) | TestAndUnsetBit<21>(ctx.dirty) | TestAndUnsetBit<30>(ctx.dirty)) {
+        // TODO(merry): One of these bits might merely signify an update to the format. Verify this.
+
+        // Format updated
+        Audio::UpdateFormat(channel_id, ctx.mono_or_stereo, ctx.format);
+
+        // Synchronise flags
+        /*
+        auto ctx0 = GetChannelContext(BASE_ADDR_0, channel_id);
+        auto ctx1 = GetChannelContext(BASE_ADDR_1, channel_id);
+        ctx0.flags1_raw = ctx1.flags1_raw = ctx.flags1_raw;
+        ctx0.flags2_raw = ctx1.flags2_raw = ctx.flags2_raw;
+        SetChannelContext(BASE_ADDR_0, channel_id, ctx0);
+        SetChannelContext(BASE_ADDR_1, channel_id, ctx1);
+        */
+
+        // Embedded Buffer Changed
+        Audio::EnqueueBuffer(channel_id, ctx.buffer_id, Memory::GetPhysicalPointer(ctx.physical_address), ctx.sample_count, ctx.is_looping);
+    }
+
+    if (TestAndUnsetBit<19>(ctx.dirty)) {
+        // Buffer queue
+        for (int i = 0; i < 4; i++) {
+            if (ctx.buffers_dirty & (1 << i)) {
+                auto& b = ctx.buffers[i];
+                Audio::EnqueueBuffer(channel_id, b.buffer_id, Memory::GetPhysicalPointer(b.physical_address), b.sample_count, b.is_looping);
             }
-
-            if (TestAndUnsetBit(ctx.dirty, 2)) {
-                // Update ADPCM coefficients
-                Audio::UpdateAdpcm(chanid, channel_adpcm_coeffs[chanid].coeff);
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 17)) {
-                // Interpolation type
-                LOG_WARNING(Service_DSP, "Channel %i: Unimplemented dirty bit 17", chanid);
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 18)) {
-                // Rate
-                LOG_WARNING(Service_DSP, "Channel %i: Unimplemented Rate %f", chanid, ctx.rate);
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 22)) {
-                // IIR
-                LOG_WARNING(Service_DSP, "Channel %i: Unimplemented IIR %x", chanid, ctx.iirfilter_type);
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 28)) {
-                // Sync count
-                LOG_DEBUG(Service_DSP, "Channel %i: Update Sync Count");
-                status0.sync = ctx.sync;
-                status1.sync = ctx.sync;
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 25) | TestAndUnsetBit(ctx.dirty, 26) | TestAndUnsetBit(ctx.dirty, 27)) {
-                // Mix
-                for (int i = 0; i < 12; i++)
-                    LOG_DEBUG(Service_DSP, "Channel %i: mix[%i] %f", chanid, i, ctx.mix[i]);
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 4) | TestAndUnsetBit(ctx.dirty, 21) | TestAndUnsetBit(ctx.dirty, 30)) {
-                // TODO(merry): One of these bits might merely signify an update to the format. Verify this.
-
-                // Format updated
-                Audio::UpdateFormat(chanid, ctx.mono_or_stereo, ctx.format);
-                channel_contex0[chanid].flags1_raw = channel_contex1[chanid].flags1_raw = ctx.flags1_raw;
-                channel_contex0[chanid].flags2_raw = channel_contex1[chanid].flags2_raw = ctx.flags2_raw;
-
-                // Embedded Buffer Changed
-                Audio::EnqueueBuffer(chanid, ctx.buffer_id, Memory::GetPhysicalPointer(ctx.physical_address), ctx.sample_count, ctx.is_looping);
-
-                status0.is_playing |= 0x100; // TODO: This is supposed to flicker on then turn off.
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 19)) {
-                // Buffer queue
-                for (int i = 0; i < 4; i++) {
-                    if (TestAndUnsetBit(ctx.buffers_dirty, i)) {
-                        auto& b = ctx.buffers[i];
-                        Audio::EnqueueBuffer(chanid, b.buffer_id, Memory::GetPhysicalPointer(b.physical_address), b.sample_count, b.is_looping);
-                    }
-                }
-
-                if (ctx.buffers_dirty) {
-                    LOG_ERROR(Service_DSP, "Channel %i: Unknown channel buffer dirty bits: 0x%04x", chanid, ctx.buffers_dirty);
-                }
-
-                ctx.buffers_dirty = 0;
-
-                status0.is_playing |= 0x100; // TODO: This is supposed to flicker on then turn off.
-            }
-
-            if (TestAndUnsetBit(ctx.dirty, 16)) {
-                // Is Active?
-                Audio::Play(chanid, (ctx.is_active & 0xFF) != 0);
-            }
-
-            if (ctx.dirty) {
-                LOG_ERROR(Service_DSP, "Channel %i: Unknown channel dirty bits: 0x%08x", chanid, ctx.dirty);
-            }
-
-            ctx.dirty = 0;
         }
 
-        // TODO: Detect any change to the structures without a dirty flag update to identify what the other bits do.
-
-        Audio::Tick(chanid);
-
-        // Update channel status
-        bool playing = false;
-        std::tie(playing, status0.current_buffer_id, status0.buffer_position) = Audio::GetStatus(chanid);
-        if (playing) {
-            status0.is_playing |= 1;
-        } else {
-            status0.is_playing = 0;
+        if (ctx.buffers_dirty & ~(u32)0xF) {
+            LOG_ERROR(Service_DSP, "Channel %i: Unknown channel buffer dirty bits: 0x%04x", channel_id, ctx.buffers_dirty);
         }
-        status1 = status0;
+
+        ctx.buffers_dirty = 0;
+    }
+
+    if (TestAndUnsetBit<16>(ctx.dirty)) {
+        // Is Active?
+        Audio::Play(channel_id, (ctx.is_active & 0xFF) != 0);
+    }
+
+    if (ctx.dirty) {
+        LOG_ERROR(Service_DSP, "Channel %i: Unknown channel dirty bits: 0x%08x", channel_id, ctx.dirty);
+    }
+
+    ctx.dirty = 0;
+    SetChannelContext(current_base, channel_id, ctx);
+}
+
+static void UpdateChannelStatus(int channel_id) {
+    auto audio_status = Audio::GetStatus(channel_id);
+
+    ChannelStatus status;
+    status.sync = syncs[channel_id];
+    status.current_buffer_id = audio_status.most_recent_buffer_id;
+    status.buffer_position = audio_status.sample_position;
+    status.is_playing = 0;
+    if (audio_status.is_enabled) status.is_playing |= 1;
+    if (audio_status.was_fed_data) status.is_playing |= 0x100;
+
+    bool success = true;
+    success &= Memory::InjectIntoMemory(DspAddrToVAddr(BASE_ADDR_0, DSPADDR2) + channel_id * sizeof(ChannelStatus), status);
+    success &= Memory::InjectIntoMemory(DspAddrToVAddr(BASE_ADDR_1, DSPADDR2) + channel_id * sizeof(ChannelStatus), status);
+    if (!success) {
+        LOG_CRITICAL(Service_DSP, "InjectIntoMemory for DSPADDR2 failed");
+    }
+}
+
+static void AudioTick(u64, int cycles_late) {
+    VAddr current_base = GetCurrentBase();
+
+    for (int channel_id = 0; channel_id < NUM_CHANNELS; channel_id++) {
+        ReadChannelContext(current_base, channel_id);
+
+        Audio::Tick(channel_id);
+
+        UpdateChannelStatus(channel_id);
     }
 
     for (auto interrupt_event : interrupt_events)
@@ -586,12 +623,12 @@ static void GetHeadphoneStatus(Service::Interface* self) {
 static void RecvData(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
 
-    u32 registerNo = cmd_buff[1];
+    u32 register_number = cmd_buff[1];
 
     cmd_buff[1] = RESULT_SUCCESS.raw; // No error
     cmd_buff[2] = 1;
 
-    LOG_WARNING(Service_DSP, "(STUBBED) called register=%u", registerNo);
+    LOG_WARNING(Service_DSP, "(STUBBED) called register=%u", register_number);
 }
 
 /**
@@ -607,17 +644,17 @@ static void RecvData(Service::Interface* self) {
 static void RecvDataIsReady(Service::Interface* self) {
     u32* cmd_buff = Kernel::GetCommandBuffer();
 
-    u32 registerNo = cmd_buff[1];
+    u32 register_number = cmd_buff[1];
 
     cmd_buff[1] = RESULT_SUCCESS.raw; // No error
     cmd_buff[2] = 1;
 
-    LOG_WARNING(Service_DSP, "(STUBBED) called register=%u", registerNo);
+    LOG_WARNING(Service_DSP, "(STUBBED) called register=%u", register_number);
 }
 
 const Interface::FunctionInfo FunctionTable[] = {
-    {0x00010040, nullptr,                          "RecvData"},
-    {0x00020040, nullptr,                          "RecvDataIsReady"},
+    {0x00010040, RecvData,                         "RecvData"},
+    {0x00020040, RecvDataIsReady,                  "RecvDataIsReady"},
     {0x00030080, nullptr,                          "SendData"},
     {0x00040040, nullptr,                          "SendDataIsEmpty"},
     {0x000500C2, nullptr,                          "SendFifoEx"},
