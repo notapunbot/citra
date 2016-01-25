@@ -131,6 +131,38 @@ void WriteBlock(VAddr addr, const u8* data, size_t size);
 u8* GetPointer(VAddr virtual_address);
 
 /**
+* Extracts a POD type from memory. Returns false if address is invalid.
+*/
+template <typename T>
+bool ExtractFromMemory(VAddr address, T& object) {
+    static_assert(std::is_standard_layout<T>::value, "Type must have standard layout");
+
+    const u8* memory = GetPointer(address);
+    if (!memory) {
+        return false;
+    }
+
+    std::memcpy(&object, memory, sizeof(T));
+    return true;
+}
+
+/**
+* Injects a POD type into memory. Returns false if address is invalid.
+*/
+template <typename T>
+bool InjectIntoMemory(VAddr address, const T& object) {
+    static_assert(std::is_standard_layout<T>::value, "Type must have standard layout");
+
+    u8* memory = GetPointer(address);
+    if (!memory) {
+        return false;
+    }
+
+    std::memcpy(memory, &object, sizeof(T));
+    return true;
+}
+
+/**
 * Converts a virtual address inside a region with 1:1 mapping to physical memory to a physical
 * address. This should be used by services to translate addresses for use by the hardware.
 */
