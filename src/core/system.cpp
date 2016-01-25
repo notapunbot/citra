@@ -2,7 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "core/audio/stream.h"
+#include "core/audio/audio.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/system.h"

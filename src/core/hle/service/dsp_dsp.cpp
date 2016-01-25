@@ -5,7 +5,7 @@
 #include "common/bit_field.h"
 #include "common/logging/log.h"
 
-#include "core/audio/stream.h"
+#include "core/audio/audio.h"
 #include "core/core_timing.h"
 #include "core/hle/hle.h"
 #include "core/hle/kernel/event.h"
@@ -36,51 +36,51 @@ static std::unordered_map<std::pair<u32, u32>, Kernel::SharedPtr<Kernel::Event>,
 static const u64 frame_tick = 1310252ull;
 static int tick_event;
 
-// Addresses of various things
-static const VAddr BASE_ADDR_0 = Memory::DSP_RAM_VADDR + 0x40000;
-static const VAddr BASE_ADDR_1 = Memory::DSP_RAM_VADDR + 0x60000;
-static constexpr VAddr DspAddrToVAddr(VAddr base, u32 dsp_addr) {
-    return (VAddr(dsp_addr) << 1) + base;
-}
-static const u32 DSPADDR0 = 0xBFFF; // Frame Counter
-static const u32 DSPADDR1 = 0x9E92; // Channel Context (x24)
-static const u32 DSPADDR2 = 0x8680; // Channel Status (x24)
-static const u32 DSPADDR3 = 0xA792; // ADPCM Coefficients (x24)
-static const u32 DSPADDR4 = 0x9430; // Context
-static const u32 DSPADDR5 = 0x8400; // Status
-static const u32 DSPADDR6 = 0x8540; // Loopback Samples
-static const u32 DSPADDR7 = 0x9494;
-static const u32 DSPADDR8 = 0x8710;
-static const u32 DSPADDR9 = 0x8410; // ???
-static const u32 DSPADDR10 = 0xA912;
-static const u32 DSPADDR11 = 0xAA12;
-static const u32 DSPADDR12 = 0xAAD2;
-static const u32 DSPADDR13 = 0xAC52;
-static const u32 DSPADDR14 = 0xAC5C;
-static const u32 DSPADDR_frame_counter = DSPADDR0;
-
 static const int NUM_CHANNELS = 24;
 
+// DSP Addresses
+
+static const VAddr BASE_ADDR_0 = Memory::DSP_RAM_VADDR + 0x40000;
+static const VAddr BASE_ADDR_1 = Memory::DSP_RAM_VADDR + 0x60000;
+
+enum DspRegion {
+    DSPADDR0 = 0xBFFF, // Frame Counter
+    DSPADDR1 = 0x9E92, // Channel Context (x24)
+    DSPADDR2 = 0x8680, // Channel Status (x24)
+    DSPADDR3 = 0xA792, // ADPCM Coefficients (x24)
+    DSPADDR4 = 0x9430, // Context
+    DSPADDR5 = 0x8400, // Status
+    DSPADDR6 = 0x8540, // Loopback Samples
+    DSPADDR7 = 0x9494,
+    DSPADDR8 = 0x8710,
+    DSPADDR9 = 0x8410, // ???
+    DSPADDR10 = 0xA912,
+    DSPADDR11 = 0xAA12,
+    DSPADDR12 = 0xAAD2,
+    DSPADDR13 = 0xAC52,
+    DSPADDR14 = 0xAC5C
+};
+
+static constexpr VAddr DspAddrToVAddr(VAddr base, DspRegion dsp_addr) {
+    return (VAddr(dsp_addr) << 1) + base;
+}
+
 /**
- * DSP_DSP::DspEndian
- *     Care must be taken when reading/writing 32-bit values. The DSP has a 16-bit wordsize and is big-endian.
- *     The bytes in each word when viewed from the ARM11, however, are in little-endian.
- *     Thus we have what appears to be a middle-endian encoding.
- *
- *     The below function is its own inverse.
+ * dsp_u32:
+ *     Care must be taken when reading/writing 32-bit values as the words are not in the expected order.
  */
 struct dsp_u32 {
+    operator u32() {
+        return Convert(storage);
+    }
+    void operator=(u32 newvalue) {
+        storage = Convert(newvalue);
+    }
+private:
     static constexpr u32 Convert(u32 value) {
         return ((value & 0x0000FFFF) << 16) | ((value & 0xFFFF0000) >> 16);
     }
-    operator u32() {
-        return Convert(value);
-    }
-    void operator=(u32 newvalue) {
-        value = Convert(newvalue);
-    }
-private:
-    u32 value;
+    u32 storage;
 };
 
 #define INSERT_PADDING_DSPWORDS(num_words) u16 CONCAT2(pad, __LINE__)[(num_words)]
@@ -88,21 +88,16 @@ private:
     static_assert(std::is_standard_layout<name>::value, "Structure doesn't use standard layout"); \
     static_assert(sizeof(name) == (size), "Unexpected struct size")
 
-/*
- * ADPCM seems to be the usual Nintendo format.
- * ps = predictor / scaler
- * yn[0,1] = sample history
- * Coefficients are found at DSPADDR3
- */
-
 struct Buffer {
     dsp_u32 physical_address;
     dsp_u32 sample_count;
-    u16 adpcm_ps;
-    s16 adpcm_yn[2];
-    u8 has_adpcm;
+
+    INSERT_PADDING_DSPWORDS(3);
+    INSERT_PADDING_BYTES(1);
+
     u8 is_looping;
     u16 buffer_id;
+
     INSERT_PADDING_DSPWORDS(1);
 };
 
@@ -114,36 +109,39 @@ struct ChannelContext {
     float mix[12];
     float rate;
     u8 rim[2];
-    u16 iirFilterType;
-    u16 iirFilter_mono[2];
-    u16 iirFilter_biquad[5];
+    u16 iirfilter_type;
+    u16 iirfilter_mono[2];
+    u16 iirfilter_biquad[5];
 
     // Buffer Queue
     u16 buffers_dirty;                //< Which of those queued buffers is dirty (bit i == buffers[i])
     Buffer buffers[4];                //< Queued Buffers
 
     INSERT_PADDING_DSPWORDS(2);
+
     u16 is_active;                    //< Lower 8 bits == 0x01 if true.
     u16 sync;
+
     INSERT_PADDING_DSPWORDS(4);
 
-    // Current Buffer
+    // Embedded Buffer
     dsp_u32 physical_address;
     dsp_u32 sample_count;
+
     union {
         u16 flags1_raw;
         BitField<0, 2, u16> mono_or_stereo;
         BitField<2, 2, Audio::Format> format;
-        BitField<4, 12, u16> rest;
     };
-    u16 adpcm_ps;
-    s16 adpcm_yn[2];
+
+    INSERT_PADDING_DSPWORDS(3);
+
     union {
         u16 flags2_raw;
         BitField<0, 1, u16> has_adpcm;
         BitField<1, 1, u16> is_looping;
-        BitField<2, 14, u16> rest2;
     };
+
     u16 buffer_id;
 };
 ASSERT_STRUCT(ChannelContext, 192);
@@ -154,7 +152,7 @@ struct ChannelStatus {
     u16 sync;
     dsp_u32 buffer_position;
     u16 current_buffer_id;
-    u16 previous_buffer_id;
+    INSERT_PADDING_DSPWORDS(1);
 };
 ASSERT_STRUCT(ChannelStatus, 12);
 
@@ -175,8 +173,9 @@ static void AudioTick(u64, int cycles_late) {
     VAddr current_base;
 
     {
-        int id0 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_0, DSPADDR_frame_counter));
-        int id1 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_1, DSPADDR_frame_counter));
+        // Frame IDs.
+        int id0 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_0, DSPADDR0));
+        int id1 = (int)Memory::Read16(DspAddrToVAddr(BASE_ADDR_1, DSPADDR0));
 
         // The frame id increments once per audio frame, with wraparound at 65,535.
         // I am uncertain whether the real DSP actually does something like this,
@@ -207,7 +206,7 @@ static void AudioTick(u64, int cycles_late) {
         if (ctx.dirty) {
             if (TestAndUnsetBit(ctx.dirty, 29)) {
                 // First time init
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 29");
+                LOG_DEBUG(Service_DSP, "Channel %i: First Time Init", chanid);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 2)) {
@@ -217,50 +216,42 @@ static void AudioTick(u64, int cycles_late) {
 
             if (TestAndUnsetBit(ctx.dirty, 17)) {
                 // Interpolation type
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 17");
+                LOG_WARNING(Service_DSP, "Channel %i: Unimplemented dirty bit 17", chanid);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 18)) {
                 // Rate
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 18");
-                LOG_INFO(Service_DSP, "Rate %f", ctx.rate);
+                LOG_WARNING(Service_DSP, "Channel %i: Unimplemented Rate %f", chanid, ctx.rate);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 22)) {
                 // IIR
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 22");
-                LOG_INFO(Service_DSP, "IIR %x", ctx.iirFilterType);
+                LOG_WARNING(Service_DSP, "Channel %i: Unimplemented IIR %x", chanid, ctx.iirfilter_type);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 28)) {
                 // Sync count
-                LOG_DEBUG(Service_DSP, "Update Sync Count");
-
+                LOG_DEBUG(Service_DSP, "Channel %i: Update Sync Count");
                 status0.sync = ctx.sync;
                 status1.sync = ctx.sync;
             }
 
             if (TestAndUnsetBit(ctx.dirty, 25) | TestAndUnsetBit(ctx.dirty, 26) | TestAndUnsetBit(ctx.dirty, 27)) {
                 // Mix
-                LOG_WARNING(Service_DSP, "Unimplemented dirty bit 25/26/27");
                 for (int i = 0; i < 12; i++)
-                    LOG_INFO(Service_DSP, "mix[%i] %f", i, ctx.mix[i]);
+                    LOG_DEBUG(Service_DSP, "Channel %i: mix[%i] %f", chanid, i, ctx.mix[i]);
             }
 
             if (TestAndUnsetBit(ctx.dirty, 4) | TestAndUnsetBit(ctx.dirty, 21) | TestAndUnsetBit(ctx.dirty, 30)) {
                 // TODO(merry): One of these bits might merely signify an update to the format. Verify this.
-                // Embedded Buffer Changed
-                Audio::UpdateFormat(chanid, ctx.mono_or_stereo, ctx.format, ctx.rest);
+
+                // Format updated
+                Audio::UpdateFormat(chanid, ctx.mono_or_stereo, ctx.format);
                 channel_contex0[chanid].flags1_raw = channel_contex1[chanid].flags1_raw = ctx.flags1_raw;
                 channel_contex0[chanid].flags2_raw = channel_contex1[chanid].flags2_raw = ctx.flags2_raw;
-                if (ctx.rest || ctx.rest2) {
-                    LOG_ERROR(Service_DSP, "chan %i rest %04x rest2 %04x", chanid, ctx.rest, ctx.rest2);
-                }
-                Audio::UpdateAdpcm(chanid, channel_adpcm_coeffs[chanid].coeff);
-                Audio::EnqueueBuffer(chanid, ctx.buffer_id,
-                        Memory::GetPhysicalPointer(ctx.physical_address), ctx.sample_count,
-                        ctx.has_adpcm, ctx.adpcm_ps, ctx.adpcm_yn,
-                        ctx.is_looping);
+
+                // Embedded Buffer Changed
+                Audio::EnqueueBuffer(chanid, ctx.buffer_id, Memory::GetPhysicalPointer(ctx.physical_address), ctx.sample_count, ctx.is_looping);
 
                 status0.is_playing |= 0x100; // TODO: This is supposed to flicker on then turn off.
             }
@@ -270,15 +261,12 @@ static void AudioTick(u64, int cycles_late) {
                 for (int i = 0; i < 4; i++) {
                     if (TestAndUnsetBit(ctx.buffers_dirty, i)) {
                         auto& b = ctx.buffers[i];
-                        Audio::EnqueueBuffer(chanid, b.buffer_id,
-                                Memory::GetPhysicalPointer(b.physical_address), b.sample_count,
-                                b.has_adpcm, b.adpcm_ps, b.adpcm_yn,
-                                b.is_looping);
+                        Audio::EnqueueBuffer(chanid, b.buffer_id, Memory::GetPhysicalPointer(b.physical_address), b.sample_count, b.is_looping);
                     }
                 }
 
                 if (ctx.buffers_dirty) {
-                    LOG_ERROR(Service_DSP, "Unknown channel buffer dirty bits: 0x%04x", ctx.buffers_dirty);
+                    LOG_ERROR(Service_DSP, "Channel %i: Unknown channel buffer dirty bits: 0x%04x", chanid, ctx.buffers_dirty);
                 }
 
                 ctx.buffers_dirty = 0;
@@ -292,15 +280,13 @@ static void AudioTick(u64, int cycles_late) {
             }
 
             if (ctx.dirty) {
-                LOG_ERROR(Service_DSP, "Unknown channel dirty bits: 0x%08x", ctx.dirty);
-                LOG_ERROR(Service_DSP, "%i Rim %i %i", chanid, ctx.rim[0], ctx.rim[1]);
-                LOG_ERROR(Service_DSP, "%i IIR-type %i", chanid, ctx.iirFilterType);
-                LOG_ERROR(Service_DSP, "%i Mono %f %f", chanid, ctx.iirFilter_mono[0], ctx.iirFilter_mono[1]);
-                LOG_ERROR(Service_DSP, "%i Biquad %f %f %f %f %f", chanid, ctx.iirFilter_biquad[0], ctx.iirFilter_biquad[1], ctx.iirFilter_biquad[2], ctx.iirFilter_biquad[3], ctx.iirFilter_biquad[4]);
+                LOG_ERROR(Service_DSP, "Channel %i: Unknown channel dirty bits: 0x%08x", chanid, ctx.dirty);
             }
 
             ctx.dirty = 0;
         }
+
+        // TODO: Detect any change to the structures without a dirty flag update to identify what the other bits do.
 
         Audio::Tick(chanid);
 
@@ -335,7 +321,7 @@ static void ConvertProcessAddressFromDspDram(Service::Interface* self) {
     u32 addr = cmd_buff[1];
 
     cmd_buff[1] = 0; // No error
-    cmd_buff[2] = DspAddrToVAddr(BASE_ADDR_0, addr);
+    cmd_buff[2] = DspAddrToVAddr(BASE_ADDR_0, (DspRegion)addr);
 }
 
 /**
