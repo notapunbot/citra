@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <boost/optional.hpp>
 #include <cstddef>
 
 #include "common/common_types.h"
@@ -134,16 +135,17 @@ u8* GetPointer(VAddr virtual_address);
 * Extracts a POD type from memory. Returns false if address is invalid.
 */
 template <typename T>
-bool ExtractFromMemory(VAddr address, T& object) {
+boost::optional<T> ExtractFromMemory(VAddr address) {
     static_assert(std::is_standard_layout<T>::value, "Type must have standard layout");
 
     const u8* memory = GetPointer(address);
     if (!memory) {
-        return false;
+        return {};
     }
 
+    T object;
     std::memcpy(&object, memory, sizeof(T));
-    return true;
+    return boost::make_optional(object);
 }
 
 /**

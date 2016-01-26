@@ -195,13 +195,11 @@ static VAddr GetCurrentBase() {
 static std::array<u16, NUM_CHANNELS> syncs;
 
 static ChannelContext GetChannelContext(VAddr base, int channel_id) {
-    ChannelContext ctx;
-
-    if (!Memory::ExtractFromMemory(DspAddrToVAddr(base, DSPADDR1) + channel_id * sizeof(ChannelContext), ctx)) {
+    auto ret = Memory::ExtractFromMemory<ChannelContext>(DspAddrToVAddr(base, DSPADDR1) + channel_id * sizeof(ChannelContext));
+    if (!ret) {
         LOG_CRITICAL(Service_DSP, "ExtractFromMemory for DSPADDR1 failed");
     }
-
-    return ctx;
+    return *ret;
 }
 
 static void SetChannelContext(VAddr base, int channel_id, const ChannelContext& ctx) {
@@ -224,12 +222,12 @@ static void ReadChannelContext(VAddr current_base, int channel_id) {
 
     if (TestAndUnsetBit<2>(ctx.dirty)) {
         // Update ADPCM coefficients
-        AdpcmCoefficients coeff;
-        if (!Memory::ExtractFromMemory(DspAddrToVAddr(current_base, DSPADDR3) + channel_id * sizeof(coeff), coeff)) {
+        auto coeff = Memory::ExtractFromMemory<AdpcmCoefficients>(DspAddrToVAddr(current_base, DSPADDR3) + channel_id * sizeof(AdpcmCoefficients));
+        if (!coeff) {
             LOG_CRITICAL(Service_DSP, "ExtractFromMemory for DSPADDR3 failed");
             return;
         }
-        Audio::UpdateAdpcm(channel_id, coeff.coeff);
+        Audio::UpdateAdpcm(channel_id, coeff->coeff);
     }
 
     if (TestAndUnsetBit<17>(ctx.dirty)) {
