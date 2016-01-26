@@ -252,7 +252,7 @@ void EnqueueBuffer(int channel_id, u16 buffer_id, void* data, int sample_count, 
         break;
     }
 
-    c.queue.emplace( Buffer { buffer_id, b, is_looping });
+    c.queue.emplace(Buffer{ buffer_id, b, is_looping });
 
     if (c.queue.size() > 10) {
         LOG_ERROR(Audio, "We have far far too many buffers enqueued on channel %i (%i of them)", channel_id, c.queue.size());
