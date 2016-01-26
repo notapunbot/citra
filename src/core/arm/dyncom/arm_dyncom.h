@@ -21,8 +21,6 @@ public:
     ARM_DynCom(PrivilegeMode initial_mode);
     ~ARM_DynCom();
 
-    void ClearInstructionCache() override;
-
     void SetPC(u32 pc) override;
     u32 GetPC() const override;
     u32 GetReg(int index) const override;
