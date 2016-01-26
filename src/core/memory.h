@@ -132,7 +132,7 @@ void WriteBlock(VAddr addr, const u8* data, size_t size);
 u8* GetPointer(VAddr virtual_address);
 
 /**
-* Extracts a POD type from memory. Returns false if address is invalid.
+* Extracts an object from memory. Returns boost::none if address is invalid.
 */
 template <typename T>
 boost::optional<T> ExtractFromMemory(VAddr address) {
@@ -149,7 +149,7 @@ boost::optional<T> ExtractFromMemory(VAddr address) {
 }
 
 /**
-* Injects a POD type into memory. Returns false if address is invalid.
+* Injects a object into memory. Returns false if address is invalid.
 */
 template <typename T>
 bool InjectIntoMemory(VAddr address, const T& object) {
