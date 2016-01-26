@@ -140,7 +140,7 @@ boost::optional<T> ExtractFromMemory(VAddr address) {
 
     const u8* memory = GetPointer(address);
     if (!memory) {
-        return {};
+        return boost::none;
     }
 
     T object;
