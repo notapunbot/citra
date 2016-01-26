@@ -82,6 +82,7 @@ endif()
 target_link_libraries(citra-qt core video_core common qhexedit)
 target_link_libraries(citra-qt ${OPENGL_gl_LIBRARY} ${CITRA_QT_LIBS})
 target_link_libraries(citra-qt ${PLATFORM_LIBRARIES})
+target_link_libraries(citra-qt ${OPENAL_LIBRARIES})
 
 if(${CMAKE_SYSTEM_NAME} MATCHES "Linux|FreeBSD|OpenBSD|NetBSD")
     install(TARGETS citra-qt RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}/bin")
@@ -121,4 +122,20 @@ if (Qt5_FOUND AND MSVC)
     unset(Qt5_PLATFORMS_DIR)
     unset(DLL_DEST)
     unset(PLATFORMS)
+endif()
+
+if (MSVC)
+    set(OPENAL_DLL_DIR "${OPENAL_PREFIX}/bin/Win64/")
+    set(DLL_DEST "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/")
+
+    string(REPLACE "/" "\\\\" OPENAL_DLL_DIR ${OPENAL_DLL_DIR})
+    string(REPLACE "/" "\\\\" DLL_DEST ${DLL_DEST})
+
+    add_custom_command(TARGET citra-qt POST_BUILD
+        COMMAND robocopy ${OPENAL_DLL_DI} R${DLL_DEST} soft_oal.dll /NJH /NJS /NDL /NFL /NC /NS /NP || cmd /c "exit /b 0"
+        COMMAND rename ${DLL_DEST}soft_oal.dll OpenAL.dll || cmd /c "exit /b 0"
+    )
+
+    unset(OPENAL_DLL_DIR)
+    unset(DLL_DEST)
 endif()

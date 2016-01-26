@@ -23,8 +23,16 @@ if [ "$TRAVIS_OS_NAME" = "linux" -o -z "$TRAVIS_OS_NAME" ]; then
         make -j4 && make install
     )
 
+    (
+        git clone https://github.com/kcat/openal-soft.git
+        git reset --hard 14df326876d92f63c9c007da3c0434fba47c30b8
+        mkdir openal-soft/build && cd openal-soft/build
+        cmake ..
+        make -j4 && make install
+    )
+
 elif [ "$TRAVIS_OS_NAME" = "osx" ]; then
     brew update > /dev/null # silence the very verbose output
-    brew install qt5 glfw3
+    brew install qt5 glfw3 openal-soft
     gem install xcpretty
 fi
