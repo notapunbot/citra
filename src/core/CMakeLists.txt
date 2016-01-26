@@ -11,6 +11,7 @@ set(SRCS
             arm/skyeye_common/vfp/vfpdouble.cpp
             arm/skyeye_common/vfp/vfpinstr.cpp
             arm/skyeye_common/vfp/vfpsingle.cpp
+            audio/audio.cpp
             core.cpp
             core_timing.cpp
             file_sys/archive_backend.cpp
@@ -137,6 +138,7 @@ set(HEADERS
             arm/skyeye_common/vfp/asm_vfp.h
             arm/skyeye_common/vfp/vfp.h
             arm/skyeye_common/vfp/vfp_helper.h
+            audio/audio.h
             core.h
             core_timing.h
             file_sys/archive_backend.h

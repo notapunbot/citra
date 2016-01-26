@@ -38,6 +38,8 @@ project(citra)
 option(ENABLE_GLFW "Enable the GLFW frontend" ON)
 option(CITRA_USE_BUNDLED_GLFW "Download bundled GLFW binaries" OFF)
 
+option(CITRA_USE_BUNDLED_OPENAL "Download bundled OpenAL binaries" OFF)
+
 option(ENABLE_QT "Enable the Qt frontend" ON)
 option(CITRA_USE_BUNDLED_QT "Download bundled Qt binaries" OFF)
 option(CITRA_FORCE_QT4 "Use Qt4 even if Qt5 is available." OFF)
@@ -158,6 +160,26 @@ if (ENABLE_GLFW)
         pkg_search_module(GLFW REQUIRED glfw3)
     endif()
 endif()
+
+if (CITRA_USE_BUNDLED_OPENAL)
+    if (WIN32)
+        set(OPENAL_VER "openal-soft-1.17.1-bin")
+    else()
+        message(FATAL_ERROR "No bundled OpenAL binaries for your toolchain. Disable CITRA_USER_BUNDLED_OPENAL and provide your own.")
+    endif()
+
+    if (DEFINED OPENAL_VER)
+        download_bundled_external("openal/" ${OPENAL_VER} OPENAL_PREFIX)
+    endif()
+
+    set(OPENAL_INCLUDE_DIRS "${OPENAL_PREFIX}/include" CACHE PATH "Path to OpenAL-Soft headers")
+    set(OPENAL_LIBRARY_DIRS "${OPENAL_PREFIX}/libs/Win64" CACHE PATH "Path to OpenAL-Soft libraries")
+    set(OPENAL_LIBRARIES OpenAL32.lib)
+else()
+    find_package(OpenAL REQUIRED)
+endif()
+link_directories(${OPENAL_LIBRARY_DIRS})
+include_directories(${OPENAL_INCLUDE_DIRS})
 
 IF (APPLE)
     FIND_LIBRARY(COCOA_LIBRARY Cocoa)           # Umbrella framework for everything GUI-related
